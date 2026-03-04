@@ -72,8 +72,9 @@ end
 Make HTTP requests from anywhere in your code using `PatientHttp::SolidQueue`:
 
 ```ruby
-PatientHttp::SolidQueue.get(
-	"https://api.example.com/users/#{user_id}",
+request = PatientHttp::Request.new(:get, "https://api.example.com/users/#{user_id}")
+PatientHttp::SolidQueue.execute(
+	request,
 	callback: FetchDataCallback,
 	callback_args: {user_id: user_id}
 )
@@ -121,8 +122,8 @@ class ApiCallback
 	end
 end
 
-PatientHttp::SolidQueue.get(
-	"https://api.example.com/data/#{id}",
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:get, "https://api.example.com/data/#{id}"),
 	callback: ApiCallback
 )
 ```
@@ -148,8 +149,8 @@ class ApiCallback
 	end
 end
 
-PatientHttp::SolidQueue.get(
-	"https://api.example.com/data/#{id}",
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:get, "https://api.example.com/data/#{id}"),
 	callback: ApiCallback,
 	raise_error_responses: true
 )
@@ -174,52 +175,52 @@ end
 
 ### Making Requests with PatientHttp::SolidQueue
 
-The main entry point is the `PatientHttp::SolidQueue` module, which provides convenience methods for all HTTP verbs:
+The main entry point is `PatientHttp::SolidQueue.execute`, which accepts a `PatientHttp::Request` object:
 
 ```ruby
 # GET request
-PatientHttp::SolidQueue.get(
-	"https://api.example.com/users/123",
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:get, "https://api.example.com/users/123"),
 	callback: MyCallback,
 	callback_args: {user_id: 123}
 )
 
 # POST request with JSON body
-PatientHttp::SolidQueue.post(
-	"https://api.example.com/users",
-	callback: MyCallback,
-	json: {name: "John", email: "john@example.com"}
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:post, "https://api.example.com/users", json: {name: "John", email: "john@example.com"}),
+	callback: MyCallback
 )
 
 # PUT request
-PatientHttp::SolidQueue.put(
-	"https://api.example.com/users/123",
-	callback: MyCallback,
-	json: {name: "Updated Name"}
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:put, "https://api.example.com/users/123", json: {name: "Updated Name"}),
+	callback: MyCallback
 )
 
 # PATCH request
-PatientHttp::SolidQueue.patch(
-	"https://api.example.com/users/123",
-	callback: MyCallback,
-	json: {status: "active"}
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:patch, "https://api.example.com/users/123", json: {status: "active"}),
+	callback: MyCallback
 )
 
 # DELETE request
-PatientHttp::SolidQueue.delete(
-	"https://api.example.com/users/123",
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:delete, "https://api.example.com/users/123"),
 	callback: MyCallback
 )
 ```
 
-Available options:
+`PatientHttp::Request` accepts the following options:
+
+- `headers:` - Request headers
+- `body:` - Request body string (for POST/PUT/PATCH)
+- `json:` - Object to serialize as JSON body (cannot use with `body:`)
+- `timeout:` - Request timeout in seconds
+
+`PatientHttp::SolidQueue.execute` accepts:
 
 - `callback:` - (required) Callback service class or class name
 - `callback_args:` - Hash of arguments passed to callback via response/error
-- `headers:` - Request headers
-- `body:` - Request body (for POST/PUT/PATCH)
-- `json:` - Object to serialize as JSON body (cannot use with body)
-- `timeout:` - Request timeout in seconds
 - `raise_error_responses:` - Treat non-2xx responses as errors
 
 ### Using Request Templates
@@ -284,8 +285,8 @@ class FetchDataCallback
 end
 
 # Pass data via callback_args option
-PatientHttp::SolidQueue.get(
-	"https://api.example.com/users/#{user_id}",
+PatientHttp::SolidQueue.execute(
+	PatientHttp::Request.new(:get, "https://api.example.com/users/#{user_id}"),
 	callback: FetchDataCallback,
 	callback_args: {
 		user_id: user_id,
