@@ -33,9 +33,11 @@ RSpec.describe PatientHttp::SolidQueue do
   describe ".execute" do
     let(:callback_class) do
       klass = Class.new do
-        def on_complete(response); end
+        def on_complete(response)
+        end
 
-        def on_error(error); end
+        def on_error(error)
+        end
       end
       stub_const("TestCallback", klass)
       klass
@@ -52,26 +54,6 @@ RSpec.describe PatientHttp::SolidQueue do
       request = PatientHttp::Request.new(:get, "https://example.com")
       result = described_class.execute(request, callback: callback_class)
       expect(result).to be_a(String)
-    end
-  end
-
-  describe "HTTP convenience methods" do
-    let(:callback_class) do
-      klass = Class.new do
-        def on_complete(response); end
-
-        def on_error(error); end
-      end
-      stub_const("TestHttpCallback", klass)
-      klass
-    end
-
-    %i[get post put patch delete].each do |method|
-      it "enqueues a RequestJob for #{method}" do
-        described_class.public_send(method, "https://example.com", callback: callback_class)
-        job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
-        expect(job[:job]).to eq(PatientHttp::SolidQueue::RequestJob)
-      end
     end
   end
 

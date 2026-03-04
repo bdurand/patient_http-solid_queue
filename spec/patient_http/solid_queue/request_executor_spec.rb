@@ -5,9 +5,11 @@ require "spec_helper"
 RSpec.describe PatientHttp::SolidQueue::RequestExecutor do
   let(:callback_class) do
     klass = Class.new do
-      def on_complete(response); end
+      def on_complete(response)
+      end
 
-      def on_error(error); end
+      def on_error(error)
+      end
     end
     stub_const("TestExecutorCallback", klass)
     klass

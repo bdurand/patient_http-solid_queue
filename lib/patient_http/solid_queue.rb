@@ -11,8 +11,9 @@ require "solid_queue"
 #
 # == Usage
 #
-#   PatientHttp::SolidQueue.get(
-#     "https://api.example.com/users/123",
+#   request = PatientHttp::Request.new(:get, "https://api.example.com/users/123")
+#   PatientHttp::SolidQueue.execute(
+#     request,
 #     callback: MyCallback,
 #     callback_args: {user_id: 123}
 #   )
@@ -53,6 +54,7 @@ module PatientHttp
     @after_completion_callbacks = []
     @after_error_callbacks = []
     @external_storage = nil
+    @request_handler = nil
 
     class << self
       attr_writer :configuration
@@ -152,58 +154,6 @@ module PatientHttp
         request_id
       end
 
-      # Enqueue an async HTTP request.
-      #
-      # @param method [Symbol] HTTP method (:get, :post, :put, :patch, :delete)
-      # @param url [String, URI] full URL to request
-      # @param callback [Class, String] callback service class
-      # @param headers [Hash, PatientHttp::HttpHeaders] request headers
-      # @param body [String, nil] request body
-      # @param json [Object, nil] JSON object to serialize as body
-      # @param timeout [Float] request timeout in seconds
-      # @param raise_error_responses [Boolean, nil] treat non-2xx responses as errors
-      # @param callback_args [Hash, nil] arguments to pass to callback
-      # @return [String] request ID
-      def request(
-        method,
-        url,
-        callback:,
-        headers: {},
-        body: nil,
-        json: nil,
-        timeout: nil,
-        raise_error_responses: nil,
-        callback_args: nil
-      )
-        req = PatientHttp::Request.new(method, url, body: body, json: json, headers: headers, timeout: timeout)
-        execute(req, callback: callback, raise_error_responses: raise_error_responses, callback_args: callback_args)
-      end
-
-      # Convenience method for GET requests.
-      def get(url, callback:, **options)
-        request(:get, url, callback: callback, **options)
-      end
-
-      # Convenience method for POST requests.
-      def post(url, callback:, **options)
-        request(:post, url, callback: callback, **options)
-      end
-
-      # Convenience method for PUT requests.
-      def put(url, callback:, **options)
-        request(:put, url, callback: callback, **options)
-      end
-
-      # Convenience method for PATCH requests.
-      def patch(url, callback:, **options)
-        request(:patch, url, callback: callback, **options)
-      end
-
-      # Convenience method for DELETE requests.
-      def delete(url, callback:, **options)
-        request(:delete, url, callback: callback, **options)
-      end
-
       # Start the processor.
       #
       # @return [void]
@@ -213,6 +163,17 @@ module PatientHttp
         @processor = PatientHttp::Processor.new(configuration)
         @processor.observe(ProcessorObserver.new(@processor))
         @processor.start
+
+        @request_handler ||= lambda do |request:, callback:, raise_error_responses:, callback_args:|
+          execute(
+            request,
+            callback: callback,
+            raise_error_responses: raise_error_responses,
+            callback_args: callback_args
+          )
+        end
+
+        PatientHttp.register_handler(@request_handler)
       end
 
       # Signal the processor to drain (stop accepting new requests).
@@ -230,6 +191,10 @@ module PatientHttp
       # @return [void]
       def stop(timeout: nil)
         return unless @processor
+
+        if @request_handler
+          PatientHttp.unregister_handler(@request_handler)
+        end
 
         timeout ||= configuration.shutdown_timeout
         @processor.stop(timeout: timeout)
