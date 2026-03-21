@@ -34,7 +34,7 @@ Active Job that resolves the callback class and invokes:
 - `on_complete(response)` for successful requests
 - `on_error(error)` for request errors
 
-### PatientHttp::SolidQueue::SolidQueueLifecycleHooks
+### PatientHttp::SolidQueue::LifecycleHooks
 Registers hooks to automatically:
 - start processor on `SolidQueue.on_worker_start`
 - stop processor on `SolidQueue.on_worker_stop`
@@ -64,7 +64,7 @@ Background thread that periodically:
 
 ## Request Lifecycle
 
-1. Application code calls `PatientHttp::SolidQueue.get/post/put/patch/delete`.
+1. Application code calls `PatientHttp.get/post/put/patch/delete` (which delegates to the registered Solid Queue handler) or `PatientHttp::SolidQueue.execute` directly.
 2. `RequestJob` is enqueued with serialized request data and callback metadata.
 3. `RequestJob` decrypts/deserializes and calls `RequestExecutor.execute`.
 4. `RequestExecutor` creates an async task and enqueues it on the processor.

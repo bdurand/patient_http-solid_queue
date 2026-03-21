@@ -107,14 +107,23 @@ module PatientHttp
         !!@processor&.running?
       end
 
+      # Check if the processor is draining (not accepting new requests).
+      #
+      # @return [Boolean]
       def draining?
         !!@processor&.draining?
       end
 
+      # Check if the processor is stopping.
+      #
+      # @return [Boolean]
       def stopping?
         !!@processor&.stopping?
       end
 
+      # Check if the processor is stopped.
+      #
+      # @return [Boolean]
       def stopped?
         @processor.nil? || @processor.stopped?
       end
@@ -196,7 +205,6 @@ module PatientHttp
           PatientHttp.unregister_handler(@request_handler)
         end
 
-        timeout ||= configuration.shutdown_timeout
         @processor.stop(timeout: timeout)
         @processor = nil
       end
@@ -206,10 +214,16 @@ module PatientHttp
       # @return [void]
       # @api private
       def reset!
+        if @request_handler
+          PatientHttp.unregister_handler(@request_handler)
+          @request_handler = nil
+        end
         @processor&.stop(timeout: 0)
         @processor = nil
         @configuration = nil
         @external_storage = nil
+        @after_completion_callbacks = []
+        @after_error_callbacks = []
       end
 
       # Invoke the registered completion callbacks.
@@ -220,6 +234,8 @@ module PatientHttp
       def invoke_completion_callbacks(response)
         @after_completion_callbacks.each do |callback|
           callback.call(response)
+        rescue => e
+          configuration.logger&.error("[PatientHttp::SolidQueue] after_completion callback error: #{e.class} - #{e.message}")
         end
       end
 
@@ -231,6 +247,8 @@ module PatientHttp
       def invoke_error_callbacks(error)
         @after_error_callbacks.each do |callback|
           callback.call(error)
+        rescue => e
+          configuration.logger&.error("[PatientHttp::SolidQueue] after_error callback error: #{e.class} - #{e.message}")
         end
       end
 

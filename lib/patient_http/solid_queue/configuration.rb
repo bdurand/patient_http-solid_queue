@@ -28,6 +28,10 @@ module PatientHttp
       # @return [#call] The configured decryptor callable
       attr_reader :decryptor
 
+      # Buffer in seconds subtracted from SolidQueue.shutdown_timeout to derive
+      # the default shutdown_timeout for this gem's connection pool.
+      SHUTDOWN_TIMEOUT_BUFFER = 2
+
       def initialize(
         heartbeat_interval: 60,
         orphan_threshold: 300,
@@ -35,7 +39,7 @@ module PatientHttp
         payload_store_threshold: DEFAULT_PAYLOAD_STORE_THRESHOLD,
         **pool_options
       )
-        pool_options[:shutdown_timeout] ||= 23
+        pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
         pool_options[:user_agent] ||= "SolidQueue-AsyncHttp"
         pool_options[:logger] ||= (defined?(SolidQueue.logger) ? SolidQueue.logger : nil)
 
