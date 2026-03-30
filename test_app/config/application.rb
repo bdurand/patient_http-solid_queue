@@ -29,7 +29,7 @@ module TestAppNew
     # not contain `.rb` files, or that should not be reloaded or eager loaded.
     # Common ones are `templates`, `generators`, or `middleware`, for example.
     config.autoload_lib(ignore: %w[assets tasks])
-    config.active_job.queue_adapter = :async
+    config.active_job.queue_adapter = :solid_queue
     config.hosts.clear
 
     # Configuration for the application, engines, and railties goes here.
@@ -42,5 +42,15 @@ module TestAppNew
 
     # Don't generate system test files.
     config.generators.system_tests = nil
+
+    # Start SolidQueue supervisor in embedded async mode (same process as web server).
+    # This mirrors the Puma plugin's start_async pattern for use with Falcon.
+    config.after_initialize do
+      unless defined?(Rake.application) && Rake.application.top_level_tasks.any? { |task| task.start_with?("db:") }
+        PatientHttp::SolidQueue.start
+        SolidQueue::Supervisor.start(mode: :async, standalone: false)
+        at_exit { PatientHttp::SolidQueue.stop(timeout: 5) }
+      end
+    end
   end
 end
