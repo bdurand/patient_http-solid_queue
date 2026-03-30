@@ -50,7 +50,7 @@ class StatusReport < ApplicationRecord
     if name_or_attributes.is_a?(String)
       super(name: name_or_attributes)
     else
-      super(name_or_attributes)
+      super
     end
   end
 
