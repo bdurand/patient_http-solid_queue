@@ -33,7 +33,7 @@ namespace :test_app do
   desc "Start the test application"
   task :start do
     ENV["BUNDLE_GEMFILE"] = File.expand_path("test_app/Gemfile", __dir__)
-    exec "cd test_app && bin/rails server"
+    exec "cd test_app && bin/rails server -p #{ENV.fetch("PORT", "9292")}"
   end
 
   desc "Stop the running test application on default port 9292 or PORT env var"
