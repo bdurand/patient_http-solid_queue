@@ -388,7 +388,8 @@ PatientHttp::SolidQueue.configure do |config|
   # Default User-Agent header for all requests (default: "PatientHttp")
   config.user_agent = "MyApp/1.0"
 
-  # Timeout for graceful shutdown in seconds (default: 23)
+  # Timeout for graceful shutdown in seconds
+  # (default: SolidQueue.shutdown_timeout - 2)
   # This should be less than your worker shutdown timeout
   config.shutdown_timeout = 23
 

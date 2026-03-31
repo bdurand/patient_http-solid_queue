@@ -31,7 +31,7 @@ class TestController < ApplicationController
     jobs = []
     async_count.times do
       jobs << lambda {
-        PatientHttp::SolidQueue.get(
+        PatientHttp.get(
           "#{base_url}/slow?delay=#{drifted_delay.call}",
           callback: StatusReport::Callback,
           timeout: timeout

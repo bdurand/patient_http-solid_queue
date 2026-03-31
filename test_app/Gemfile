@@ -11,7 +11,7 @@ gem "sqlite3", ">= 2.1"
 # Use the Falcon web server [https://github.com/socketry/falcon]
 gem "falcon"
 
-gem "patient_http", path: "../../async_http_pool"
+gem "patient_http", github: "bdurand/patient_http", branch: "main"
 
 # Windows does not include zoneinfo files, so bundle the tzinfo-data gem
 gem "tzinfo-data", platforms: %i[windows jruby]

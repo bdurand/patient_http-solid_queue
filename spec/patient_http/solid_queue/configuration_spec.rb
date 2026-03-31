@@ -22,8 +22,8 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
       expect(config.payload_store_threshold).to eq(64 * 1024)
     end
 
-    it "sets shutdown_timeout to 23" do
-      expect(config.shutdown_timeout).to eq(23)
+    it "sets shutdown_timeout based on SolidQueue.shutdown_timeout" do
+      expect(config.shutdown_timeout).to eq(SolidQueue.shutdown_timeout - described_class::SHUTDOWN_TIMEOUT_BUFFER)
     end
   end
 
