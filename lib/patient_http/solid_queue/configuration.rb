@@ -39,7 +39,9 @@ module PatientHttp
         payload_store_threshold: DEFAULT_PAYLOAD_STORE_THRESHOLD,
         **pool_options
       )
-        pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
+        if ::SolidQueue.shutdown_timeout
+          pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
+        end
         pool_options[:user_agent] ||= "SolidQueue-AsyncHttp"
         pool_options[:logger] ||= (defined?(SolidQueue.logger) ? SolidQueue.logger : nil)
 
