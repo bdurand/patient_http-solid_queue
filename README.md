@@ -340,25 +340,30 @@ PatientHttp.get(
 
 Requests and responses from asynchronous HTTP requests may be stored in your queue backend (and optionally external storage) in order to execute completion callbacks. This can raise security concerns if they contain sensitive data since the data will be stored in plain text.
 
-You can configure encryption and decryption callables to encrypt request and response data when it is serialized:
+You can configure an `encryption_key` to automatically encrypt and decrypt request and response data using `ActiveSupport::MessageEncryptor`:
 
 ```ruby
 PatientHttp::SolidQueue.configure do |config|
-  config.encryption { |data| MyEncryption.encrypt(data) }
-  config.decryption { |encrypted_value| MyEncryption.decrypt(encrypted_value) }
+  config.encryption_key = Rails.application.credentials.patient_http_secret
 end
 ```
 
-The encryption callable will be given a hash and should return a JSON-safe value. The decryption callable will be given the output from the encryption callable and should return the original value.
+The key must be a string of at least 16 characters. It is used to derive a proper-length AES-256-GCM key via `ActiveSupport::KeyGenerator`.
 
-You can also pass any object that responds to `call`:
+#### Key Rotation
+
+To rotate encryption keys, pass an array of keys. The first key is used for encrypting new data, while all keys are tried when decrypting:
 
 ```ruby
 PatientHttp::SolidQueue.configure do |config|
-  config.encryption(->(data) { MyEncryption.encrypt(data) })
-  config.decryption(->(encrypted_value) { MyEncryption.decrypt(encrypted_value) })
+  config.encryption_key = [
+    Rails.application.credentials.patient_http_secret,     # current key (encrypts new data)
+    Rails.application.credentials.patient_http_secret_old  # old key (still decrypts old data)
+  ]
 end
 ```
+
+Once all data encrypted with the old key has been processed, you can remove it from the array.
 
 ## Configuration
 
@@ -421,9 +426,9 @@ PatientHttp::SolidQueue.configure do |config|
   # Custom logger (defaults to SolidQueue.logger)
   config.logger = Rails.logger
 
-  # Encryption for sensitive data (see Sensitive Data Handling)
-  config.encryption { |data| MyEncryption.encrypt(data) }
-  config.decryption { |data| MyEncryption.decrypt(data) }
+  # Encryption key for sensitive data (see Sensitive Data Handling)
+  # Accepts a string or an array of strings for key rotation.
+  config.encryption_key = Rails.application.credentials.patient_http_secret
 end
 ```
 

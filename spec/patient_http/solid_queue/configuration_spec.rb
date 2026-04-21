@@ -59,21 +59,90 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
     end
   end
 
+  describe "#encryption_key=" do
+    it "accepts a string key" do
+      config.encryption_key = "a-secret-key-that-is-long-enough"
+      expect(config.encryption_key).to eq("a-secret-key-that-is-long-enough")
+    end
+
+    it "accepts an array of keys for rotation" do
+      keys = ["new-primary-key-long-enough", "old-key-still-long-enough"]
+      config.encryption_key = keys
+      expect(config.encryption_key).to eq(keys)
+    end
+
+    it "accepts nil to disable encryption" do
+      config.encryption_key = "a-secret-key-that-is-long-enough"
+      config.encryption_key = nil
+      expect(config.encryption_key).to be_nil
+    end
+
+    it "raises if not a String or Array" do
+      expect { config.encryption_key = 123 }.to raise_error(ArgumentError, /String/)
+    end
+
+    it "raises if key is too short" do
+      expect { config.encryption_key = "short" }.to raise_error(ArgumentError, /at least/)
+    end
+
+    it "raises if array contains a non-string" do
+      expect { config.encryption_key = ["valid-key-long-enough!", 123] }.to raise_error(ArgumentError, /String/)
+    end
+
+    it "raises if array contains a short key" do
+      expect { config.encryption_key = ["valid-key-long-enough!", "short"] }.to raise_error(ArgumentError, /at least/)
+    end
+
+    it "raises if array is empty" do
+      expect { config.encryption_key = [] }.to raise_error(ArgumentError, /empty/)
+    end
+  end
+
   describe "#encrypt / #decrypt" do
-    it "returns data unchanged by default" do
+    it "returns data unchanged when no encryption key is set" do
       data = {"key" => "value"}
       expect(config.encrypt(data)).to eq(data)
       expect(config.decrypt(data)).to eq(data)
     end
 
-    it "uses the encryptor callable if set" do
-      config.encryption { |d| d.merge("encrypted" => true) }
-      result = config.encrypt({"key" => "value"})
-      expect(result["encrypted"]).to be true
+    context "with a single encryption key" do
+      before { config.encryption_key = "a-secret-key-that-is-long-enough" }
+
+      it "encrypts data to a string" do
+        data = {"key" => "value"}
+        encrypted = config.encrypt(data)
+        expect(encrypted).to be_a(String)
+        expect(encrypted).not_to include("value")
+      end
+
+      it "round-trips encrypt and decrypt" do
+        data = {"key" => "value", "nested" => {"a" => 1}}
+        expect(config.decrypt(config.encrypt(data))).to eq(data)
+      end
     end
 
-    it "raises if both block and callable given" do
-      expect { config.encryption(proc {}) { |d| d } }.to raise_error(ArgumentError)
+    context "with key rotation" do
+      let(:old_key) { "old-secret-key-for-rotation" }
+      let(:new_key) { "new-secret-key-for-rotation" }
+
+      it "decrypts data encrypted with the old key after rotation" do
+        config.encryption_key = old_key
+        data = {"key" => "value"}
+        encrypted_with_old = config.encrypt(data)
+
+        config.encryption_key = [new_key, old_key]
+        expect(config.decrypt(encrypted_with_old)).to eq(data)
+      end
+
+      it "encrypts new data with the primary (first) key" do
+        config.encryption_key = [new_key, old_key]
+        data = {"key" => "value"}
+        encrypted = config.encrypt(data)
+
+        # Verify it can be decrypted with only the new key
+        config.encryption_key = new_key
+        expect(config.decrypt(encrypted)).to eq(data)
+      end
     end
   end
 
@@ -81,6 +150,15 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
     it "includes all configuration keys" do
       h = config.to_h
       expect(h).to include("heartbeat_interval", "orphan_threshold", "payload_store_threshold")
+    end
+
+    it "reports encryption as false when no key is set" do
+      expect(config.to_h["encryption"]).to be false
+    end
+
+    it "reports encryption as true when a key is set" do
+      config.encryption_key = "a-secret-key-that-is-long-enough"
+      expect(config.to_h["encryption"]).to be true
     end
   end
 end
