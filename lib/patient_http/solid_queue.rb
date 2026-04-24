@@ -150,7 +150,7 @@ module PatientHttp
         callback_args = PatientHttp::CallbackValidator.validate_callback_args(callback_args)
         request_id = SecureRandom.uuid
 
-        encrypted = configuration.encrypt(request.as_json)
+        encrypted = configuration.encryptor.encrypt(request.as_json)
 
         data = if external_storage.enabled?
           external_storage.store(encrypted, max_size: configuration.payload_store_threshold)

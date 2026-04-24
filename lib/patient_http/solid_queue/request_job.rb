@@ -23,7 +23,7 @@ module PatientHttp
       def perform(data, callback_service_name, raise_error_responses, callback_args, request_id)
         ref_data = PatientHttp::ExternalStorage.storage_ref?(data) ? data : nil
         actual_data = ref_data ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
-        actual_data = PatientHttp::SolidQueue.configuration.decrypt(actual_data)
+        actual_data = PatientHttp::SolidQueue.configuration.encryptor.decrypt(actual_data)
 
         request = PatientHttp::Request.load(actual_data)
         active_job_data = PatientHttp::SolidQueue::Context.current_job

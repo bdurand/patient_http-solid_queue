@@ -31,7 +31,7 @@ module PatientHttp
 
         ref_data = PatientHttp::ExternalStorage.storage_ref?(data) ? data : nil
         actual_data = ref_data ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
-        actual_data = PatientHttp::SolidQueue.configuration.decrypt(actual_data)
+        actual_data = PatientHttp::SolidQueue.configuration.encryptor.decrypt(actual_data)
 
         begin
           if result_type == "response"

@@ -340,7 +340,7 @@ PatientHttp.get(
 
 Requests and responses from asynchronous HTTP requests may be stored in your queue backend (and optionally external storage) in order to execute completion callbacks. This can raise security concerns if they contain sensitive data since the data will be stored in plain text.
 
-You can configure an `encryption_key` to automatically encrypt and decrypt request and response data using `ActiveSupport::MessageEncryptor`:
+Encryption is configured on the parent `patient_http` gem. You can set an `encryption_key` to automatically encrypt and decrypt request and response data using `ActiveSupport::MessageEncryptor`:
 
 ```ruby
 PatientHttp::SolidQueue.configure do |config|
@@ -348,22 +348,7 @@ PatientHttp::SolidQueue.configure do |config|
 end
 ```
 
-The key must be a string of at least 16 characters. It is used to derive a proper-length AES-256-GCM key via `ActiveSupport::KeyGenerator`.
-
-#### Key Rotation
-
-To rotate encryption keys, pass an array of keys. The first key is used for encrypting new data, while all keys are tried when decrypting:
-
-```ruby
-PatientHttp::SolidQueue.configure do |config|
-  config.encryption_key = [
-    Rails.application.credentials.patient_http_secret,     # current key (encrypts new data)
-    Rails.application.credentials.patient_http_secret_old  # old key (still decrypts old data)
-  ]
-end
-```
-
-Once all data encrypted with the old key has been processed, you can remove it from the array.
+See the [patient_http gem](https://github.com/bdurand/patient_http) for full documentation on encryption options, including key rotation and custom encryption callables.
 
 ## Configuration
 
@@ -428,6 +413,7 @@ PatientHttp::SolidQueue.configure do |config|
 
   # Encryption key for sensitive data (see Sensitive Data Handling)
   # Accepts a string or an array of strings for key rotation.
+  # Encryption is provided by the parent patient_http gem.
   config.encryption_key = Rails.application.credentials.patient_http_secret
 end
 ```
