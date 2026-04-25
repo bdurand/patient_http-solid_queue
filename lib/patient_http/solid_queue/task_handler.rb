@@ -40,7 +40,7 @@ module PatientHttp
       private
 
       def store_if_needed(data)
-        encrypted = PatientHttp::SolidQueue.configuration.encrypt(data)
+        encrypted = PatientHttp::SolidQueue.encrypt(data)
         external_storage = PatientHttp::SolidQueue.external_storage
         if external_storage.enabled?
           external_storage.store(encrypted, max_size: PatientHttp::SolidQueue.configuration.payload_store_threshold)

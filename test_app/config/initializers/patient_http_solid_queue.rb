@@ -7,7 +7,7 @@ PatientHttp::SolidQueue.configure do |config|
   config.proxy_url = ENV["HTTP_PROXY"]
   config.register_payload_store(:files, adapter: :file, directory: Rails.root.join("tmp/payloads"))
   config.payload_store_threshold = 1024
-  config.encryption_key = "test-secret-key-for-development-only"
+  config.encryption_key = ENV["PATIENT_HTTP_ENCRYPTION_KEY"]
 end
 
 PatientHttp::SolidQueue.after_completion do |response|

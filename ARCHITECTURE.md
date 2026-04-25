@@ -60,7 +60,6 @@ Background thread that periodically:
 - `heartbeat_interval`
 - `orphan_threshold`
 - `payload_store_threshold`
-- `encryption` / `decryption`
 
 ## Request Lifecycle
 
