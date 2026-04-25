@@ -57,6 +57,24 @@ RSpec.describe PatientHttp::SolidQueue do
     end
   end
 
+  describe ".encrypt" do
+    it "delegates to the configured encryptor" do
+      encryptor = double("encryptor")
+      allow(described_class.configuration).to receive(:encryptor).and_return(encryptor)
+      expect(encryptor).to receive(:encrypt).with("value").and_return("encrypted")
+      expect(described_class.encrypt("value")).to eq("encrypted")
+    end
+  end
+
+  describe ".decrypt" do
+    it "delegates to the configured encryptor" do
+      encryptor = double("encryptor")
+      allow(described_class.configuration).to receive(:encryptor).and_return(encryptor)
+      expect(encryptor).to receive(:decrypt).with("encrypted").and_return("value")
+      expect(described_class.decrypt("encrypted")).to eq("value")
+    end
+  end
+
   describe ".after_completion and .after_error" do
     it "registers completion callbacks" do
       invoked = false

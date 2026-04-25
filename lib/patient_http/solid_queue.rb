@@ -150,7 +150,7 @@ module PatientHttp
         callback_args = PatientHttp::CallbackValidator.validate_callback_args(callback_args)
         request_id = SecureRandom.uuid
 
-        encrypted = configuration.encryptor.encrypt(request.as_json)
+        encrypted = encrypt(request.as_json)
 
         data = if external_storage.enabled?
           external_storage.store(encrypted, max_size: configuration.payload_store_threshold)
@@ -250,6 +250,22 @@ module PatientHttp
         rescue => e
           configuration.logger&.error("[PatientHttp::SolidQueue] after_error callback error: #{e.class} - #{e.message}")
         end
+      end
+
+      # Encrypt a value using the configured encryptor.
+      #
+      # @param value [Object] the value to encrypt
+      # @return [String] the encrypted value
+      def encrypt(value)
+        configuration.encryptor.encrypt(value)
+      end
+
+      # Decrypt a value using the configured encryptor.
+      #
+      # @param value [String] the encrypted value to decrypt
+      # @return [Object] the decrypted value
+      def decrypt(value)
+        configuration.encryptor.decrypt(value)
       end
 
       # Returns the processor instance.
