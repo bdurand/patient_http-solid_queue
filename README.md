@@ -452,8 +452,9 @@ PatientHttp::SolidQueue.after_completion do |response|
 end
 
 PatientHttp::SolidQueue.after_error do |error|
-  StatsD.increment("patient_http.error.#{error.error_type}")
-  Sentry.capture_message("Async HTTP error: #{error.message}")
+  error_type = error.is_a?(PatientHttp::Error) ? error.error_type : "exception"
+  StatsD.increment("patient_http.error.#{error_type}")
+  Rails.logger.error("Async HTTP error: #{error.class.name} - #{error.message}")
 end
 ```
 
