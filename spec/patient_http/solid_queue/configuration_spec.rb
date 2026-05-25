@@ -59,6 +59,32 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
     end
   end
 
+  describe "#on_retries_exhausted" do
+    it "accepts a callable object" do
+      handler = ->(error) { error }
+      config = described_class.new(on_retries_exhausted: handler)
+      expect(config.on_retries_exhausted).to eq(handler)
+    end
+
+    it "accepts nil" do
+      config = described_class.new(on_retries_exhausted: nil)
+      expect(config.on_retries_exhausted).to be_nil
+    end
+
+    it "raises ArgumentError for non-callable value" do
+      expect { described_class.new(on_retries_exhausted: "not_callable") }.to raise_error(
+        ArgumentError,
+        "on_retries_exhausted must respond to #call, got: String"
+      )
+    end
+
+    it "accepts a block via the setter" do
+      config = described_class.new
+      config.on_retries_exhausted { |error| error }
+      expect(config.on_retries_exhausted).to be_a(Proc)
+    end
+  end
+
   describe "#to_h" do
     it "includes all configuration keys" do
       h = config.to_h

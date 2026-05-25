@@ -371,6 +371,9 @@ PatientHttp::SolidQueue.configure do |config|
   # Number of retries for failed requests (default: 3)
   config.retries = 3
 
+  # Handler called when a callback job exhausts all Sidekiq retries
+  config.on_retries_exhausted { |error| MyAlertService.notify(error) }
+
   # HTTP/HTTPS proxy URL (default: nil)
   # Supports authentication: "http://user:pass@proxy.example.com:8080"
   config.proxy_url = "http://proxy.example.com:8080"

@@ -22,15 +22,38 @@ module PatientHttp
       # @return [String, nil] Queue name for RequestJob and CallbackJob
       attr_reader :queue_name
 
+      # @return [#call, nil] Handler invoked when a CallbackWorker job exhausts all retries.
+      # @overload on_retries_exhausted
+      #   Returns the current handler.
+      #   @return [#call, nil]
+      # @overload on_retries_exhausted(&block)
+      #   Sets a block as the handler.
+      #   @yield [error] block to execute when retries are exhausted
+      #   @yieldparam error [PatientHttp::Error] information about the error
+      def on_retries_exhausted(&block)
+        if block
+          @on_retries_exhausted = block
+        else
+          @on_retries_exhausted
+        end
+      end
+
       # Buffer in seconds subtracted from SolidQueue.shutdown_timeout to derive
       # the default shutdown_timeout for this gem's connection pool.
       SHUTDOWN_TIMEOUT_BUFFER = 2
 
+      # @param heartbeat_interval [Numeric] Interval in seconds for heartbeat updates (default: 60)
+      # @param orphan_threshold [Numeric] Time in seconds to consider a job orphaned (default: 300)
+      # @param queue_name [String, nil] Optional queue name for RequestJob and CallbackJob (default: nil)
+      # @param payload_store_threshold [Integer] Size threshold in bytes for external payload storage (default: 64KB)
+      # @param on_retries_exhausted [#call, nil] Handler called when a CallbackWorker job exhausts retries
+      # @param pool_options [Hash] Additional options passed to the SolidQueue connection pool
       def initialize(
         heartbeat_interval: 60,
         orphan_threshold: 300,
         queue_name: nil,
         payload_store_threshold: DEFAULT_PAYLOAD_STORE_THRESHOLD,
+        on_retries_exhausted: nil,
         **pool_options
       )
         if ::SolidQueue.shutdown_timeout
@@ -45,6 +68,7 @@ module PatientHttp
         self.heartbeat_interval = heartbeat_interval
         self.orphan_threshold = orphan_threshold
         self.payload_store_threshold = payload_store_threshold || DEFAULT_PAYLOAD_STORE_THRESHOLD
+        self.on_retries_exhausted = on_retries_exhausted
       end
 
       def payload_store_threshold=(value)
@@ -75,13 +99,29 @@ module PatientHttp
         apply_queue_name(name)
       end
 
+      # Set the on_retries_exhausted handler.
+      #
+      # This handler is called when a CallbackWorker job exhausts all retries.
+      # It receives the same arguments as the on_error callback.
+      #
+      # @param value [#call, nil] A callable object or nil to clear the handler
+      # @raise [ArgumentError] If value is not callable and not nil
+      def on_retries_exhausted=(value)
+        if value && !value.respond_to?(:call)
+          raise ArgumentError.new("on_retries_exhausted must respond to #call, got: #{value.class}")
+        end
+
+        @on_retries_exhausted = value
+      end
+
       # @return [Hash] configuration as a hash for logging/inspection
       def to_h
         super.merge(
           "payload_store_threshold" => payload_store_threshold,
           "heartbeat_interval" => heartbeat_interval,
           "orphan_threshold" => orphan_threshold,
-          "queue_name" => queue_name
+          "queue_name" => queue_name,
+          "on_retries_exhausted" => on_retries_exhausted ? "defined" : nil
         )
       end
 

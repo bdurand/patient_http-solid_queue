@@ -12,12 +12,31 @@ module PatientHttp
       # Clean up externally stored payloads when job exhausts all retries.
       after_discard do |job, _exception|
         data = job.arguments[0]
+        result_type = job.arguments[1]
+
+        begin
+          handler = PatientHttp::SolidQueue.configuration.on_retries_exhausted
+          if handler && result_type == "error"
+            actual_data = if PatientHttp::SolidQueue.external_storage.storage_ref?(data)
+              PatientHttp::SolidQueue.external_storage.fetch(data)
+            else
+              data
+            end
+            actual_data = PatientHttp::SolidQueue.decrypt(actual_data)
+            error = PatientHttp::Error.load(actual_data)
+            handler.call(error)
+          end
+        rescue => e
+          PatientHttp::SolidQueue.configuration.logger&.warn(
+            "[PatientHttp::SolidQueue] on_retries_exhausted handler failed: #{e.class.name} #{e.message}".strip
+          )
+        end
 
         begin
           PatientHttp::SolidQueue.external_storage.delete(data)
         rescue => e
           PatientHttp::SolidQueue.configuration.logger&.warn(
-            "[PatientHttp::SolidQueue] Failed to delete stored payload for dead job: #{e.message}"
+            "[PatientHttp::SolidQueue] Failed to delete stored payload for dead job: #{e.class.name} #{e.message}".strip
           )
         end
       end
