@@ -7,5 +7,3 @@ gem "propshaft"
 gem "sqlite3", ">= 2.1"
 gem "falcon"
 gem "tzinfo-data", platforms: %i[windows jruby]
-
-gem "patient_http", github: "bdurand/patient_http", branch: "main"
