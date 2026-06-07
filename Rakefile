@@ -64,4 +64,13 @@ namespace :test_app do
     ENV["BUNDLE_GEMFILE"] = File.expand_path("test_app/Gemfile", __dir__)
     exec "cd test_app && bundle install"
   end
+
+  namespace :bundle do
+    desc "Update bundle for the test application"
+    task :update do
+      Bundler.with_unbundled_env do
+        exec("bundle", "update", chdir: File.expand_path("test_app", __dir__))
+      end
+    end
+  end
 end
