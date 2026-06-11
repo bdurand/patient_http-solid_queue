@@ -66,6 +66,7 @@ module PatientHttp
       def configure
         configuration = Configuration.new
         yield(configuration) if block_given?
+        register_handler
         @configuration = configuration
       end
 
@@ -173,16 +174,7 @@ module PatientHttp
         @processor.observe(ProcessorObserver.new(@processor))
         @processor.start
 
-        @request_handler ||= lambda do |request:, callback:, raise_error_responses:, callback_args:|
-          execute(
-            request,
-            callback: callback,
-            raise_error_responses: raise_error_responses,
-            callback_args: callback_args
-          )
-        end
-
-        PatientHttp.register_handler(@request_handler)
+        register_handler
       end
 
       # Signal the processor to drain (stop accepting new requests).
@@ -216,7 +208,6 @@ module PatientHttp
       def reset!
         if @request_handler
           PatientHttp.unregister_handler(@request_handler)
-          @request_handler = nil
         end
         @processor&.stop(timeout: 0)
         @processor = nil
@@ -224,6 +215,23 @@ module PatientHttp
         @external_storage = nil
         @after_completion_callbacks = []
         @after_error_callbacks = []
+      end
+
+      # Register SolidQueue as the request handler for processing HTTP requests. This is called
+      # automatically when the processor starts or you call PatientHttp::SolidQueue.configure.
+      #
+      # @return [void]
+      def register_handler
+        @request_handler ||= lambda do |request:, callback:, raise_error_responses:, callback_args:|
+          execute(
+            request,
+            callback: callback,
+            raise_error_responses: raise_error_responses,
+            callback_args: callback_args
+          )
+        end
+
+        PatientHttp.register_handler(@request_handler)
       end
 
       # Invoke the registered completion callbacks.
