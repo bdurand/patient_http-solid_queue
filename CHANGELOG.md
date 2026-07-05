@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.0.2
+
+### Fixed
+
+- Externally stored request payloads are no longer deleted as soon as the request is submitted to the processor. They are now retained until the request completes so that Active Job retries, shutdown re-enqueues, and crash recovery can still fetch them. Discarded `RequestJob` jobs clean up their stored payloads via an `after_discard` hook.
+- `RequestJob` now declares `retry_on` for `PatientHttp::MaxCapacityError` and `PatientHttp::NotRunningError` with a polynomial backoff. Previously these errors (raised as normal backpressure when the processor is at max capacity) sent jobs straight to the failed jobs list because Active Job does not retry by default.
+- `CallbackJob` no longer deletes externally stored payloads when the callback raises, so retries can fetch the payload and re-run the callback.
+- Crash recovery no longer silently loses a request if the process crashes between removing the inflight record and re-enqueueing the job. The record is now claimed first and only deleted after the job has been enqueued, so a failed recovery attempt is retried by a later garbage collection pass.
+- Fixed process registration and garbage collection on MySQL, where passing an explicit conflict target to `upsert`/`insert_all` raises an error. Crash recovery was silently disabled on MySQL.
+- `PatientHttp::SolidQueue.configure` and `reset_configuration!` now reset the memoized external storage so it picks up the new configuration.
+- Fixed race conditions that could create duplicate processors or task monitor threads from concurrent lifecycle calls; starting while the processor is draining no longer replaces it.
+- The task monitor thread no longer holds a database connection from the pool while sleeping between heartbeats.
+
 ## 1.0.1
 
 ### Fixed

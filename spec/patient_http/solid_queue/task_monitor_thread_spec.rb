@@ -37,5 +37,25 @@ RSpec.describe PatientHttp::SolidQueue::TaskMonitorThread do
       expect(thread.running?).to be true
       thread.stop
     end
+
+    it "does not start a second thread when already running" do
+      thread.start
+      first_thread = thread.instance_variable_get(:@thread)
+
+      thread.start
+
+      expect(thread.instance_variable_get(:@thread)).to be(first_thread)
+      thread.stop
+    end
+
+    it "checks out a database connection only for the duration of the work" do
+      pool = PatientHttp::SolidQueue::Record.connection_pool
+      allow(pool).to receive(:with_connection).and_call_original
+
+      thread.start
+      thread.stop
+
+      expect(pool).to have_received(:with_connection).at_least(:once)
+    end
   end
 end

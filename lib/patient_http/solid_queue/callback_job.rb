@@ -52,21 +52,22 @@ module PatientHttp
         actual_data = ref_data ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
         actual_data = PatientHttp::SolidQueue.decrypt(actual_data)
 
-        begin
-          if result_type == "response"
-            response = PatientHttp::Response.load(actual_data)
-            PatientHttp::SolidQueue.invoke_completion_callbacks(response)
-            callback_service.on_complete(response)
-          elsif result_type == "error"
-            error = PatientHttp::Error.load(actual_data)
-            PatientHttp::SolidQueue.invoke_error_callbacks(error)
-            callback_service.on_error(error)
-          else
-            raise ArgumentError, "Unknown result_type: #{result_type}"
-          end
-        ensure
-          PatientHttp::SolidQueue.external_storage.delete(ref_data) if ref_data
+        if result_type == "response"
+          response = PatientHttp::Response.load(actual_data)
+          PatientHttp::SolidQueue.invoke_completion_callbacks(response)
+          callback_service.on_complete(response)
+        elsif result_type == "error"
+          error = PatientHttp::Error.load(actual_data)
+          PatientHttp::SolidQueue.invoke_error_callbacks(error)
+          callback_service.on_error(error)
+        else
+          raise ArgumentError, "Unknown result_type: #{result_type}"
         end
+
+        # Only delete the stored payload after the callback succeeds so that
+        # retries can still fetch it. Discarded jobs are cleaned up by the
+        # after_discard hook.
+        PatientHttp::SolidQueue.external_storage.delete(ref_data) if ref_data
       end
     end
   end

@@ -55,6 +55,7 @@ module PatientHttp
     @after_error_callbacks = []
     @external_storage = nil
     @request_handler = nil
+    @lifecycle_mutex = Mutex.new
 
     class << self
       attr_writer :configuration
@@ -66,8 +67,10 @@ module PatientHttp
       def configure
         configuration = Configuration.new
         yield(configuration) if block_given?
-        register_handler
         @configuration = configuration
+        @external_storage = nil
+        register_handler
+        configuration
       end
 
       # Return the current configuration, initializing with defaults if necessary.
@@ -82,6 +85,7 @@ module PatientHttp
       # @return [Configuration]
       def reset_configuration!
         @configuration = nil
+        @external_storage = nil
         configuration
       end
 
@@ -168,11 +172,13 @@ module PatientHttp
       #
       # @return [void]
       def start
-        return if running?
+        @lifecycle_mutex.synchronize do
+          return if @processor && !@processor.stopped?
 
-        @processor = PatientHttp::Processor.new(configuration)
-        @processor.observe(ProcessorObserver.new(@processor))
-        @processor.start
+          @processor = PatientHttp::Processor.new(configuration)
+          @processor.observe(ProcessorObserver.new(@processor))
+          @processor.start
+        end
 
         register_handler
       end
@@ -181,9 +187,11 @@ module PatientHttp
       #
       # @return [void]
       def quiet
-        return unless running?
+        @lifecycle_mutex.synchronize do
+          return unless running?
 
-        @processor.drain
+          @processor.drain
+        end
       end
 
       # Stop the processor gracefully.
@@ -191,14 +199,16 @@ module PatientHttp
       # @param timeout [Float, nil] maximum time to wait for in-flight requests to complete
       # @return [void]
       def stop(timeout: nil)
-        return unless @processor
-
         if @request_handler
           PatientHttp.unregister_handler(@request_handler)
         end
 
-        @processor.stop(timeout: timeout)
-        @processor = nil
+        @lifecycle_mutex.synchronize do
+          return unless @processor
+
+          @processor.stop(timeout: timeout)
+          @processor = nil
+        end
       end
 
       # Reset all state (useful for testing).
@@ -209,8 +219,10 @@ module PatientHttp
         if @request_handler
           PatientHttp.unregister_handler(@request_handler)
         end
-        @processor&.stop(timeout: 0)
-        @processor = nil
+        @lifecycle_mutex.synchronize do
+          @processor&.stop(timeout: 0)
+          @processor = nil
+        end
         @configuration = nil
         @external_storage = nil
         @after_completion_callbacks = []

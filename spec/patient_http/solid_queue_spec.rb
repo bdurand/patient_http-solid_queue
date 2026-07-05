@@ -30,6 +30,73 @@ RSpec.describe PatientHttp::SolidQueue do
     end
   end
 
+  describe ".external_storage" do
+    it "is reset by configure so it picks up the new configuration" do
+      original_storage = described_class.external_storage
+
+      described_class.configure { |c| }
+
+      expect(described_class.external_storage).not_to be(original_storage)
+    end
+
+    it "is reset by reset_configuration!" do
+      original_storage = described_class.external_storage
+
+      described_class.reset_configuration!
+
+      expect(described_class.external_storage).not_to be(original_storage)
+    end
+  end
+
+  describe ".start" do
+    let(:processor) do
+      instance_double(
+        PatientHttp::Processor,
+        observe: nil,
+        start: nil,
+        drain: nil,
+        stop: nil,
+        running?: true,
+        stopped?: false
+      )
+    end
+
+    before do
+      allow(PatientHttp::Processor).to receive(:new).and_return(processor)
+      allow(PatientHttp::SolidQueue::ProcessorObserver).to receive(:new).and_return(
+        instance_double(PatientHttp::SolidQueue::ProcessorObserver)
+      )
+    end
+
+    after { described_class.instance_variable_set(:@processor, nil) }
+
+    it "does not start a second processor when one is already running" do
+      described_class.start
+      described_class.start
+
+      expect(PatientHttp::Processor).to have_received(:new).once
+    end
+
+    it "does not replace a draining processor" do
+      described_class.start
+      allow(processor).to receive(:running?).and_return(false)
+
+      described_class.start
+
+      expect(PatientHttp::Processor).to have_received(:new).once
+      expect(described_class.processor).to be(processor)
+    end
+
+    it "starts a new processor after the previous one stopped" do
+      described_class.start
+      allow(processor).to receive(:stopped?).and_return(true)
+
+      described_class.start
+
+      expect(PatientHttp::Processor).to have_received(:new).twice
+    end
+  end
+
   describe ".execute" do
     let(:callback_class) do
       klass = Class.new do
