@@ -34,11 +34,10 @@ module PatientHttp
       #
       # @return [void]
       def start
-        return if @running.true?
-        @running.make_true
+        return unless @running.make_true
         @stop_signal.reset
 
-        @task_monitor.ping_process
+        with_connection { @task_monitor.ping_process }
 
         @thread = Thread.new do
           run
@@ -80,16 +79,24 @@ module PatientHttp
           break unless @running.true?
 
           current_time = monotonic_time
+          update_heartbeats_due = current_time - last_heartbeat_update >= @config.heartbeat_interval
+          gc_attempt_due = current_time - last_gc_attempt >= @config.heartbeat_interval
 
-          if current_time - last_heartbeat_update >= @config.heartbeat_interval
-            @task_monitor.ping_process
-            update_heartbeats
-            last_heartbeat_update = current_time
-          end
+          if update_heartbeats_due || gc_attempt_due
+            # Check out a database connection only for the duration of the work
+            # so the thread does not hold a slot from the pool while it sleeps.
+            with_connection do
+              if update_heartbeats_due
+                @task_monitor.ping_process
+                update_heartbeats
+                last_heartbeat_update = current_time
+              end
 
-          if current_time - last_gc_attempt >= @config.heartbeat_interval
-            attempt_garbage_collection
-            last_gc_attempt = current_time
+              if gc_attempt_due
+                attempt_garbage_collection
+                last_gc_attempt = current_time
+              end
+            end
           end
 
           wait_time = @config.heartbeat_interval / 2.0
@@ -98,6 +105,10 @@ module PatientHttp
         end
 
         @config.logger&.info("[PatientHttp::SolidQueue] Monitor thread stopped")
+      end
+
+      def with_connection(&block)
+        Record.connection_pool.with_connection(&block)
       end
 
       def update_heartbeats

@@ -135,6 +135,70 @@ RSpec.describe PatientHttp::SolidQueue::TaskMonitor do
         monitor.cleanup_orphaned_requests(config.orphan_threshold, nil)
       }.to change(PatientHttp::SolidQueue::ProcessRegistration, :count).by(-1)
     end
+
+    it "deletes the inflight record after re-enqueueing the job" do
+      monitor.register(request_task)
+      PatientHttp::SolidQueue::InflightRequest.update_all(heartbeat_at: Time.current - 1000.seconds)
+
+      monitor.cleanup_orphaned_requests(config.orphan_threshold, nil)
+
+      expect(PatientHttp::SolidQueue::InflightRequest.count).to eq(0)
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:job]).to eq(PatientHttp::SolidQueue::RequestJob)
+    end
+
+    it "keeps a claimed record with a refreshed heartbeat when re-enqueueing fails" do
+      monitor.register(request_task)
+      stale_time = Time.current - 1000.seconds
+      PatientHttp::SolidQueue::InflightRequest.update_all(heartbeat_at: stale_time)
+
+      allow(ActiveJob::Base).to receive(:deserialize).and_raise(RuntimeError.new("enqueue failed"))
+
+      count = monitor.cleanup_orphaned_requests(config.orphan_threshold, nil)
+
+      expect(count).to eq(0)
+      record = PatientHttp::SolidQueue::InflightRequest.first
+      expect(record).not_to be_nil
+      expect(record.heartbeat_at).to be > stale_time
+    end
+
+    it "skips records whose heartbeat was updated concurrently" do
+      monitor.register(request_task)
+      stale_time = Time.current - 1000.seconds
+      PatientHttp::SolidQueue::InflightRequest.update_all(heartbeat_at: stale_time)
+      record = PatientHttp::SolidQueue::InflightRequest.first
+
+      # Simulate a concurrent heartbeat update after the orphan scan read the record
+      PatientHttp::SolidQueue::InflightRequest.update_all(heartbeat_at: Time.current)
+
+      threshold = Time.current - config.orphan_threshold.seconds
+      result = monitor.send(:reenqueue_orphaned_record, record, threshold, nil)
+
+      expect(result).to be false
+      expect(ActiveJob::Base.queue_adapter.enqueued_jobs).to be_empty
+      expect(PatientHttp::SolidQueue::InflightRequest.count).to eq(1)
+    end
+  end
+
+  describe "adapters without upsert conflict targets (MySQL)" do
+    it "uses the unique column as the conflict target when supported" do
+      expect(monitor.send(:upsert_unique_by, :process_id)).to eq(:process_id)
+    end
+
+    it "omits the conflict target when the adapter does not support one" do
+      allow(PatientHttp::SolidQueue::Record.connection).to receive(:supports_insert_conflict_target?).and_return(false)
+
+      expect(monitor.send(:upsert_unique_by, :process_id)).to be_nil
+    end
+
+    it "pings the process without a conflict target" do
+      allow(PatientHttp::SolidQueue::Record.connection).to receive(:supports_insert_conflict_target?).and_return(false)
+      allow(PatientHttp::SolidQueue::ProcessRegistration).to receive(:upsert)
+
+      monitor.ping_process
+
+      expect(PatientHttp::SolidQueue::ProcessRegistration).to have_received(:upsert).with(anything, unique_by: nil)
+    end
   end
 
   describe ".clear_all!" do

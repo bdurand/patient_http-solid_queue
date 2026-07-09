@@ -49,6 +49,69 @@ RSpec.describe PatientHttp::SolidQueue::CallbackJob do
     expect(instance.received[0]).to eq(:error)
   end
 
+  context "with external storage" do
+    let(:response_data) do
+      {
+        "status" => 200,
+        "headers" => {"Content-Type" => "application/json"},
+        "body" => '{"message":"success"}',
+        "callback_args" => {}
+      }
+    end
+
+    before do
+      TestPayloadStore.clear!
+      PatientHttp::SolidQueue.configure do |c|
+        c.register_payload_store(:test_store, adapter: :test_store)
+      end
+    end
+
+    after { PatientHttp::SolidQueue.reset_configuration! }
+
+    it "deletes the stored payload after the callback succeeds" do
+      stored_ref = PatientHttp::SolidQueue.external_storage.store(response_data)
+
+      described_class.new.perform(stored_ref, "response", callback_class.name)
+
+      expect(TestPayloadStore.payloads).to be_empty
+    end
+
+    it "keeps the stored payload when the callback raises so retries can fetch it" do
+      failing_callback = Class.new do
+        def on_complete(response)
+          raise "callback failed"
+        end
+
+        def on_error(error)
+          raise "callback failed"
+        end
+      end
+      stub_const("FailingCallback", failing_callback)
+
+      stored_ref = PatientHttp::SolidQueue.external_storage.store(response_data)
+
+      expect {
+        described_class.new.perform(stored_ref, "response", "FailingCallback")
+      }.to raise_error("callback failed")
+
+      expect(TestPayloadStore.payloads).not_to be_empty
+    end
+
+    it "deletes the stored payload for dead jobs via after_discard" do
+      error_data = {
+        "message" => "Network error",
+        "code" => "network_failure",
+        "callback_args" => {}
+      }
+      stored_ref = PatientHttp::SolidQueue.external_storage.store(error_data)
+
+      job = described_class.new(stored_ref, "error", "TestCallbackJobService")
+      job.send(:run_after_discard_procs, RuntimeError.new("exhausted"))
+
+      expect(TestPayloadStore.payloads).to be_empty
+    end
+  end
+
   describe "after_discard" do
     let(:error_data) do
       {
@@ -119,6 +182,7 @@ RSpec.describe PatientHttp::SolidQueue::CallbackJob do
 
     it "deletes the external storage payload" do
       PatientHttp::SolidQueue.configure { |c| }
+      allow(PatientHttp::SolidQueue.external_storage).to receive(:delete)
 
       job = described_class.new(error_data, "error", "TestCallback")
       job.send(:run_after_discard_procs, exception)

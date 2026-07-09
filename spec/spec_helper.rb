@@ -44,6 +44,8 @@ ActiveJob::Base.queue_adapter = :test
 # Enable testing mode
 PatientHttp.testing = true
 
+Dir[File.join(__dir__, "support", "**", "*.rb")].sort.each { |file| require file }
+
 RSpec.configure do |config|
   config.disable_monkey_patching!
   config.default_formatter = "doc" if config.files_to_run.one?

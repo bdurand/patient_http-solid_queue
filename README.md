@@ -94,6 +94,14 @@ The `response.callback_args` and `error.callback_args` provide access to the arg
 
 > [!IMPORTANT]
 > Do not re-raise errors in the `on_error` callback as a means to retry the request. That will just retry the error callback job. If you want to retry the original request, you can enqueue a new request from within `on_error`. Be careful with this approach, though, as it can lead to infinite retry loops if the error condition is not resolved.
+
+Callback jobs are not retried by default. If you want failed callbacks to be retried before being discarded, configure `retry_on` in an initializer:
+
+```ruby
+PatientHttp::SolidQueue::CallbackJob.retry_on StandardError, wait: :polynomially_longer, attempts: 5
+```
+
+Note that Active Job runs `after_discard` hooks for any unhandled exception, not just when configured retries are exhausted. Without `retry_on`, the first callback failure will trigger the `on_retries_exhausted` handler and delete any externally stored payload, even though the failed job can still be retried manually from Mission Control (such retries will fail if the payload was stored externally).
 >
 > Also note that the error callback is only called when an exception occurs during the HTTP request (timeout, connection failure, etc). HTTP error status codes (4xx, 5xx) do not trigger the error callback by default. Instead, they are treated as completed requests and passed to the `on_complete` callback. See the "Handling HTTP Error Responses" section below for how to treat HTTP errors as exceptions.
 
@@ -436,7 +444,7 @@ See the [Configuration](lib/patient_http/solid_queue/configuration.rb) class for
 
 > [!IMPORTANT]
 >
-> One difference between using this gem and making synchronous HTTP requests from a Solid Queue job is that if `max_connections` is reached due to slow asynchronous requests, new requests will trigger an error on the Active Job. The Active Job retry mechanism will handle re-enqueuing the job.
+> One difference between using this gem and making synchronous HTTP requests from a Solid Queue job is that if `max_connections` is reached due to slow asynchronous requests, new requests will trigger an error on the Active Job. The job declares `retry_on` for this error with a polynomial backoff, so it will automatically be retried until the processor has capacity again.
 >
 > In contrast, slow synchronous HTTP requests will fill up the worker pool and block new jobs from being dequeued until a worker thread becomes free.
 >

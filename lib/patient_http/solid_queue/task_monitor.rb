@@ -79,7 +79,7 @@ module PatientHttp
       def ping_process
         ProcessRegistration.upsert(
           {process_id: @lock_identifier, max_connections: @config.max_connections, last_seen_at: Time.current},
-          unique_by: :process_id
+          unique_by: upsert_unique_by(:process_id)
         )
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to ping process: #{e.message}")
@@ -211,30 +211,46 @@ module PatientHttp
       private
 
       def ensure_gc_lock_row!
-        GcLock.insert_all([{lock_name: GC_LOCK_NAME}], unique_by: :lock_name)
+        GcLock.insert_all([{lock_name: GC_LOCK_NAME}])
       end
 
-      # Re-enqueue a single orphaned record atomically.
+      # MySQL does not support an explicit conflict target for upserts; it always
+      # resolves conflicts via the table's unique indexes (ON DUPLICATE KEY UPDATE).
+      # Adapters with conflict targets (PostgreSQL, SQLite) require one to be given.
       #
-      # Uses a delete-by-exact-heartbeat to handle race conditions: if the
-      # heartbeat was updated between our read and the delete, the delete
-      # returns 0 rows and we skip re-enqueueing.
+      # @param column [Symbol] the unique column to use as the conflict target
+      # @return [Symbol, nil] the column, or nil when the adapter forbids a target
+      def upsert_unique_by(column)
+        Record.connection.supports_insert_conflict_target? ? column : nil
+      end
+
+      # Re-enqueue a single orphaned record.
+      #
+      # Uses a claim-by-exact-heartbeat update to handle race conditions: if the
+      # heartbeat was updated between our read and the claim, the update returns
+      # 0 rows and we skip re-enqueueing. Claiming (refreshing the heartbeat)
+      # before enqueueing means a crash mid-recovery leaves the record behind to
+      # go stale and be retried by a later GC pass, instead of losing the request.
+      # The record is only deleted after the job has been enqueued.
       #
       # @param record [InflightRequest] the orphaned record
       # @param threshold [Float] heartbeat threshold (only records below this are orphaned)
       # @param logger [Logger] logger for output
       # @return [Boolean] true if successfully re-enqueued
       def reenqueue_orphaned_record(record, threshold, logger)
-        # Atomically remove only if still orphaned (heartbeat unchanged)
-        deleted = InflightRequest
+        # Atomically claim only if still orphaned (heartbeat unchanged). The dead
+        # process_id is left in place so a failed recovery becomes orphaned again.
+        claimed = InflightRequest
           .where(task_id: record.task_id, heartbeat_at: record.heartbeat_at)
           .where("heartbeat_at < ?", threshold)
-          .delete_all
+          .update_all(heartbeat_at: Time.current)
 
-        return false if deleted == 0
+        return false if claimed == 0
 
         job_data = JSON.parse(record.job_payload)
         ActiveJob::Base.deserialize(job_data).tap { |j| j.executions = 0 }.enqueue
+
+        InflightRequest.where(task_id: record.task_id).delete_all
 
         logger&.info(
           "[PatientHttp::SolidQueue] Re-enqueued orphaned request #{record.task_id} to #{job_data["job_class"]}"
