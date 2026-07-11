@@ -60,7 +60,10 @@ module PatientHttp
     class << self
       attr_writer :configuration
 
-      # Configure the gem with a block.
+      # Configure the gem with a block. The built configuration is also set as the
+      # `PatientHttp.default_configuration` so that secrets registered at the module
+      # level with `PatientHttp.register_secret` are applied to the configuration the
+      # processor runs with, regardless of boot order.
       #
       # @yield [Configuration] the configuration object
       # @return [Configuration]
@@ -70,6 +73,7 @@ module PatientHttp
         @configuration = configuration
         @external_storage = nil
         register_handler
+        PatientHttp.default_configuration = configuration
         configuration
       end
 
