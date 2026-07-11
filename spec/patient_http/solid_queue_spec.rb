@@ -10,6 +10,26 @@ RSpec.describe PatientHttp::SolidQueue do
   end
 
   describe ".configure" do
+    after do
+      described_class.reset_configuration!
+      PatientHttp.instance_variable_set(:@module_secrets, {})
+      PatientHttp.default_configuration = nil
+    end
+
+    it "sets the built configuration as the PatientHttp default configuration" do
+      config = described_class.configure { |c| }
+
+      expect(PatientHttp.default_configuration).to be(config)
+    end
+
+    it "applies module-level secrets to the built configuration" do
+      PatientHttp.register_secret("configure_spec_secret", "s3cret")
+
+      config = described_class.configure { |c| }
+
+      expect(config.secret_manager.include?("configure_spec_secret")).to be(true)
+    end
+
     it "yields a Configuration object" do
       described_class.configure do |config|
         expect(config).to be_a(PatientHttp::SolidQueue::Configuration)
