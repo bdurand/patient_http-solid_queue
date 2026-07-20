@@ -1,6 +1,20 @@
 # frozen_string_literal: true
 
 require "bundler/setup"
+
+# SimpleCov must be started before requiring the lib
+begin
+  require "simplecov"
+  SimpleCov.start do
+    add_filter "/spec/"
+    enable_coverage :branch
+  end
+rescue LoadError
+  # SimpleCov is not available
+end
+
+Bundler.require(:default, :test)
+
 require "active_record/railtie"
 require "active_job/railtie"
 require "logger"
