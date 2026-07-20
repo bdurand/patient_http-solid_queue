@@ -13,11 +13,13 @@ rescue LoadError
   # SimpleCov is not available
 end
 
-Bundler.require(:default, :test)
-
+# Rails must be defined before Bundler.require loads solid_queue, whose
+# engine subclasses Rails::Engine.
 require "active_record/railtie"
 require "active_job/railtie"
 require "logger"
+
+Bundler.require(:default, :test)
 
 require_relative "../lib/patient_http-solid_queue"
 
