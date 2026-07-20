@@ -1,9 +1,25 @@
 # frozen_string_literal: true
 
 require "bundler/setup"
+
+# SimpleCov must be started before requiring the lib
+begin
+  require "simplecov"
+  SimpleCov.start do
+    add_filter "/spec/"
+    enable_coverage :branch
+  end
+rescue LoadError
+  # SimpleCov is not available
+end
+
+# Rails must be defined before Bundler.require loads solid_queue, whose
+# engine subclasses Rails::Engine.
 require "active_record/railtie"
 require "active_job/railtie"
 require "logger"
+
+Bundler.require(:default, :test)
 
 require_relative "../lib/patient_http-solid_queue"
 

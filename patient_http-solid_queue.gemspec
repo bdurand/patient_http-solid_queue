@@ -39,6 +39,4 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "patient_http", ">= 1.3.0"
   spec.add_dependency "solid_queue", ">= 1.0.0"
-
-  spec.add_development_dependency "bundler"
 end
