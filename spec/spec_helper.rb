@@ -87,6 +87,7 @@ RSpec.configure do |config|
   config.before(:each) do
     PatientHttp::SolidQueue.reset!
     PatientHttp::SolidQueue::TaskMonitor.clear_all!
+    PatientHttp::SolidQueue.configuration.logger = quiet_logger
     ActiveJob::Base.queue_adapter.enqueued_jobs.clear if ActiveJob::Base.queue_adapter.respond_to?(:enqueued_jobs)
   end
 end
