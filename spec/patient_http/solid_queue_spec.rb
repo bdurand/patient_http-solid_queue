@@ -77,7 +77,9 @@ RSpec.describe PatientHttp::SolidQueue do
         drain: nil,
         stop: nil,
         running?: true,
-        stopped?: false
+        stopped?: false,
+        config: PatientHttp::SolidQueue.configuration,
+        tracked_request_ids: []
       )
     end
 
@@ -88,7 +90,12 @@ RSpec.describe PatientHttp::SolidQueue do
       )
     end
 
-    after { described_class.instance_variable_set(:@processor, nil) }
+    after do
+      described_class.instance_variable_get(:@monitor_thread)&.stop
+      described_class.instance_variable_set(:@monitor_thread, nil)
+      described_class.instance_variable_set(:@task_monitor, nil)
+      described_class.instance_variable_set(:@processors, {})
+    end
 
     it "does not start a second processor when one is already running" do
       described_class.start

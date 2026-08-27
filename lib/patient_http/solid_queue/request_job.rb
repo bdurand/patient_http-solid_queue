@@ -13,7 +13,14 @@ module PatientHttp
       # Rejection due to backpressure is part of normal operation: retry until the
       # processor has capacity again. NotRunningError covers jobs that run during
       # the narrow window when the processor is draining or stopping.
-      retry_on PatientHttp::MaxCapacityError, PatientHttp::NotRunningError, wait: :polynomially_longer, attempts: :unlimited
+      # UnknownProcessorError covers rolling deploys where a job names a processor
+      # profile that an old process has not configured yet.
+      retry_on PatientHttp::MaxCapacityError, PatientHttp::NotRunningError,
+        PatientHttp::UnknownProcessorError, wait: :polynomially_longer, attempts: :unlimited
+
+      # A registry write failure is usually a transient database issue, so give
+      # it a bounded number of retries before the job is marked failed.
+      retry_on PatientHttp::SolidQueue::RegistrationError, wait: :polynomially_longer, attempts: 10
 
       # Capture the Active Job serialized hash into Context so RequestExecutor can use it.
       around_perform do |job, block|
@@ -36,7 +43,9 @@ module PatientHttp
       # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx responses as errors
       # @param callback_args [Hash, nil] Arguments to pass to the callback
       # @param request_id [String, nil] Unique request ID for tracking
-      def perform(data, callback_service_name, raise_error_responses, callback_args, request_id)
+      # @param processor_name [String, nil] Name of the processor profile to run the request
+      #   on; nil (jobs enqueued by older versions) runs on the default processor
+      def perform(data, callback_service_name, raise_error_responses, callback_args, request_id, processor_name = nil)
         actual_data = PatientHttp::ExternalStorage.storage_ref?(data) ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
         actual_data = PatientHttp::SolidQueue.decrypt(actual_data)
 
@@ -53,7 +62,8 @@ module PatientHttp
           raise_error_responses: raise_error_responses,
           callback_args: callback_args,
           active_job_data: active_job_data,
-          request_id: request_id
+          request_id: request_id,
+          processor_name: processor_name || "default"
         )
       end
     end

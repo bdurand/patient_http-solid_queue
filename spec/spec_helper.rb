@@ -29,10 +29,18 @@ quiet_logger = Logger.new(File::NULL)
 Rails.logger = quiet_logger if defined?(Rails)
 ActiveJob::Base.logger = quiet_logger
 
-# Set up in-memory SQLite3 database for Active Record
+# Set up a file-backed SQLite3 database for Active Record. An in-memory
+# database is private to each pooled connection, so the gem's own threads
+# (completion workers, the task monitor thread) would see empty tables. A
+# shared temporary file gives every connection the same database.
+require "tmpdir"
+test_db_path = File.join(Dir.mktmpdir("patient_http_solid_queue"), "test.sqlite3")
+at_exit { FileUtils.rm_rf(File.dirname(test_db_path)) }
 ActiveRecord::Base.establish_connection(
   adapter: "sqlite3",
-  database: ":memory:"
+  database: test_db_path,
+  pool: 25,
+  timeout: 5000
 )
 
 # Stub SolidQueue lifecycle hook methods that get called when the gem loads
@@ -44,11 +52,19 @@ require_relative "../db/migrate/20260216000000_create_solid_queue_async_http_tab
 SolidQueue.logger = quiet_logger if SolidQueue.respond_to?(:logger=)
 
 # SolidQueue::Record lives in the gem's app/models directory and is normally
-# loaded by Rails' autoloader. We load it directly for the test environment.
-load(File.join(
-  Gem.find_files("solid_queue.rb").first.sub("/lib/solid_queue.rb", ""),
-  "app/models/solid_queue/record.rb"
-))
+# loaded by Rails' autoloader. We load it directly for the test environment,
+# together with any concerns it includes. A concern file reopens the class
+# without a superclass, so the class must exist with its real superclass
+# before the concern loads.
+unless SolidQueue.const_defined?(:Record, false)
+  solid_queue_root = Gem.find_files("solid_queue.rb").first.sub("/lib/solid_queue.rb", "")
+  record_concerns = Dir[File.join(solid_queue_root, "app/models/solid_queue/record/*.rb")].sort
+  if record_concerns.any?
+    SolidQueue.const_set(:Record, Class.new(ActiveRecord::Base))
+    record_concerns.each { |concern| load(concern) }
+  end
+  load(File.join(solid_queue_root, "app/models/solid_queue/record.rb"))
+end
 
 # Create tables via migrations to avoid schema drift.
 ActiveRecord::Migration.verbose = false
@@ -71,6 +87,7 @@ RSpec.configure do |config|
   config.before(:each) do
     PatientHttp::SolidQueue.reset!
     PatientHttp::SolidQueue::TaskMonitor.clear_all!
+    PatientHttp::SolidQueue.configuration.logger = quiet_logger
     ActiveJob::Base.queue_adapter.enqueued_jobs.clear if ActiveJob::Base.queue_adapter.respond_to?(:enqueued_jobs)
   end
 end

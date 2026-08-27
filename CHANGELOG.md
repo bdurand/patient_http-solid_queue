@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.0
+
+### Added
+
+- Named processors: declare profiles with `config.processor(:llm, max_connections: 200)` and route requests with `PatientHttp::SolidQueue.execute(request, processor: :llm)` or a `processor:` option on the request itself. Each profile runs as an independent processor with its own capacity, timeouts, and threads, so one workload class cannot starve another. The processor name is serialized into the job arguments, so retries and crash recovery keep their routing. A job that names an unconfigured processor raises `PatientHttp::UnknownProcessorError` and is retried, which makes new profile names safe to roll out gradually. Jobs from older gem versions run on the `:default` processor.
+- Capacity fast path: requests are rejected with a cheap in-memory capacity check (`Processor#capacity_available?`) before the durable registry record is written, so a full processor rejects without a database insert and delete.
+- The `completion_failed` processor event is handled by keeping the crash-recovery registry entry and releasing it from this process, so a request whose result could not be delivered is re-enqueued by the orphan collector on its next pass instead of being silently lost.
+- A failure to write the crash-recovery registry entry raises `PatientHttp::SolidQueue::RegistrationError`, which `RequestJob` retries with backoff so a transient database issue does not fail the request outright.
+
+### Changed
+
+- Requests are now registered in the crash-recovery registry when the processor accepts them (`request_enqueued`, on the job worker thread), instead of when they start processing (`request_start`, on the reactor thread). The registry insert no longer blocks the event loop, queued requests are covered by heartbeats, and a failure to write the record rejects the request and raises to the caller so a task is never accepted without a durable record. Rejected and re-enqueued tasks now remove their registry entries, closing a duplicate-delivery window after process restarts.
+- With patient_http 1.5.0, result delivery (response decoding, callback job enqueueing, registry cleanup) runs on the processor's completion worker threads instead of the reactor thread. Size the database pool to cover `completion_threads` plus the monitor thread.
+- TaskMonitor operations check out a database connection only for the duration of each operation, so gem-owned threads do not pin connections from the pool.
+- The task monitor thread is now owned by the module and shared across all processors; `ProcessorObserver.new` takes a `task_monitor:` keyword argument.
+- The `patient_http` dependency floor is now 1.5.0.
+
 ## 1.1.0
 
 ### Changed

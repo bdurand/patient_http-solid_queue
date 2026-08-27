@@ -19,8 +19,13 @@ module PatientHttp
       # @return [Configuration] the configuration object
       attr_reader :config
 
-      def initialize(config)
+      # @param config [Configuration] the configuration object
+      # @param max_connections [#call, nil] callable returning the process's total
+      #   configured max connections; defaults to the configuration's value. With
+      #   named processors the module passes a sum across all processors.
+      def initialize(config, max_connections: nil)
         @config = config
+        @max_connections_source = max_connections || -> { config.max_connections }
         hostname = ::Socket.gethostname.force_encoding("UTF-8").tr(":/", "-")
         pid = ::Process.pid
         @lock_identifier = "#{hostname}:#{pid}:#{SecureRandom.hex(8)}".freeze
@@ -28,23 +33,32 @@ module PatientHttp
 
       # Register a request as inflight in the database.
       #
+      # Runs on the caller's thread via the request_enqueued observer event.
+      # Errors propagate so a task is never accepted without a durable record:
+      # the processor rejects the task and the enqueue raises to the caller.
+      # They are wrapped in RegistrationError so the job retries instead of
+      # failing outright, since the usual cause is a transient database issue.
+      #
       # @param task [PatientHttp::RequestTask] the request task to register
+      # @raise [RegistrationError] if the record cannot be written
       # @return [void]
       def register(task)
         job_payload = task.task_handler.active_job_data.to_json
         task_id = full_task_id(task.id)
         now = Time.current
 
-        InflightRequest.create!(
-          task_id: task_id,
-          process_id: @lock_identifier,
-          job_payload: job_payload,
-          heartbeat_at: now,
-          created_at: now
-        )
+        with_connection do
+          InflightRequest.create!(
+            task_id: task_id,
+            process_id: @lock_identifier,
+            job_payload: job_payload,
+            heartbeat_at: now,
+            created_at: now
+          )
+        end
       rescue => e
-        @config.logger&.error("[PatientHttp::SolidQueue] Failed to register task #{task_id}: #{e.message}")
-        raise if PatientHttp.testing?
+        @config.logger&.error("[PatientHttp::SolidQueue] Failed to register task #{task_id}: #{e.class} - #{e.message}")
+        raise RegistrationError.new("Failed to register task #{task_id}: #{e.class} - #{e.message}")
       end
 
       # Unregister a request from the database (called when request completes).
@@ -53,9 +67,33 @@ module PatientHttp
       # @return [void]
       def unregister(task)
         task_id = full_task_id(task.id)
-        InflightRequest.where(task_id: task_id).delete_all
+        with_connection do
+          InflightRequest.where(task_id: task_id).delete_all
+        end
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to unregister task #{task_id}: #{e.message}")
+        raise if PatientHttp.testing?
+      end
+
+      # Release a request from this process so the orphan collector re-enqueues
+      # it on its next pass. Used when a result could not be delivered: the
+      # request is no longer tracked here, so its record must not keep looking
+      # like it belongs to a live process. Orphan collection skips records
+      # whose process is still registered, which would otherwise strand the
+      # request until this process exits.
+      #
+      # @param task [PatientHttp::RequestTask] the request task to release
+      # @return [void]
+      def release(task)
+        task_id = full_task_id(task.id)
+        with_connection do
+          InflightRequest.where(task_id: task_id).update_all(
+            process_id: released_process_id,
+            heartbeat_at: Time.at(0).utc
+          )
+        end
+      rescue => e
+        @config.logger&.error("[PatientHttp::SolidQueue] Failed to release task #{task_id}: #{e.message}")
         raise if PatientHttp.testing?
       end
 
@@ -67,7 +105,9 @@ module PatientHttp
         return if task_ids.empty?
 
         full_ids = task_ids.map { |id| full_task_id(id) }
-        InflightRequest.where(task_id: full_ids).update_all(heartbeat_at: Time.current)
+        with_connection do
+          InflightRequest.where(task_id: full_ids).update_all(heartbeat_at: Time.current)
+        end
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to update heartbeats: #{e.message}")
         raise if PatientHttp.testing?
@@ -77,10 +117,14 @@ module PatientHttp
       #
       # @return [void]
       def ping_process
-        ProcessRegistration.upsert(
-          {process_id: @lock_identifier, max_connections: @config.max_connections, last_seen_at: Time.current},
-          unique_by: upsert_unique_by(:process_id)
-        )
+        max_connections = @max_connections_source.call
+
+        with_connection do
+          ProcessRegistration.upsert(
+            {process_id: @lock_identifier, max_connections: max_connections, last_seen_at: Time.current},
+            unique_by: upsert_unique_by(:process_id)
+          )
+        end
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to ping process: #{e.message}")
         raise if PatientHttp.testing?
@@ -90,7 +134,9 @@ module PatientHttp
       #
       # @return [void]
       def remove_process
-        ProcessRegistration.where(process_id: @lock_identifier).delete_all
+        with_connection do
+          ProcessRegistration.where(process_id: @lock_identifier).delete_all
+        end
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to remove process: #{e.message}")
         raise if PatientHttp.testing?
@@ -190,7 +236,9 @@ module PatientHttp
       # @return [Boolean]
       # @api private
       def registered?(task)
-        InflightRequest.where(task_id: full_task_id(task.id)).exists?
+        with_connection do
+          InflightRequest.where(task_id: full_task_id(task.id)).exists?
+        end
       end
 
       # Clear all records. Only allowed in test environment.
@@ -209,6 +257,19 @@ module PatientHttp
       end
 
       private
+
+      # Check out a database connection only for the duration of the work so
+      # gem-owned threads (completion workers, the monitor thread) do not pin
+      # connections from the pool between operations.
+      def with_connection(&block)
+        Record.connection_pool.with_connection(&block)
+      end
+
+      # Process identifier stamped on released records. It is never registered
+      # in the process table, so orphan collection always considers it dead.
+      def released_process_id
+        "#{@lock_identifier}:released"
+      end
 
       def ensure_gc_lock_row!
         GcLock.insert_all([{lock_name: GC_LOCK_NAME}])
