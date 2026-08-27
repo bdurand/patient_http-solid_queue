@@ -8,6 +8,19 @@ PatientHttp::SolidQueue.configure do |config|
   config.register_payload_store(:files, adapter: :file, directory: Rails.root.join("tmp/payloads"))
   config.payload_store_threshold = 1024
   config.encryption_key = ENV["PATIENT_HTTP_ENCRYPTION_KEY"]
+
+  # Named processor profiles in addition to the default one. The webhooks
+  # profile is deliberately small so that filling it up is easy.
+  config.processor(
+    :llm,
+    max_connections: ENV.fetch("LLM_MAX_CONNECTIONS", "200").to_i,
+    request_timeout: ENV.fetch("LLM_REQUEST_TIMEOUT", "120").to_f
+  )
+  config.processor(
+    :webhooks,
+    max_connections: ENV.fetch("WEBHOOKS_MAX_CONNECTIONS", "25").to_i,
+    request_timeout: ENV.fetch("WEBHOOKS_REQUEST_TIMEOUT", "10").to_f
+  )
 end
 
 PatientHttp::SolidQueue.after_completion do |response|
