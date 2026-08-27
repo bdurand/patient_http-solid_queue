@@ -20,11 +20,12 @@ module PatientHttp
       #
       # @param config [Configuration] the configuration object
       # @param task_monitor [TaskMonitor] the inflight request registry
-      # @param inflight_ids_callback [Proc] callback to get current inflight request IDs
-      def initialize(config, task_monitor, inflight_ids_callback)
+      # @param tracked_ids_callback [Proc] callback to get the IDs of all requests the
+      #   processors are tracking (queued, pending, and in-flight)
+      def initialize(config, task_monitor, tracked_ids_callback)
         @config = config
         @task_monitor = task_monitor
-        @inflight_ids_callback = inflight_ids_callback
+        @tracked_ids_callback = tracked_ids_callback
         @thread = nil
         @running = Concurrent::AtomicBoolean.new(false)
         @stop_signal = Concurrent::Event.new
@@ -112,12 +113,12 @@ module PatientHttp
       end
 
       def update_heartbeats
-        request_ids = @inflight_ids_callback.call
+        request_ids = @tracked_ids_callback.call
         return if request_ids.empty?
 
         @task_monitor.update_heartbeats(request_ids)
 
-        @config.logger&.debug("[PatientHttp::SolidQueue] Updated heartbeats for #{request_ids.size} inflight requests")
+        @config.logger&.debug("[PatientHttp::SolidQueue] Updated heartbeats for #{request_ids.size} tracked requests")
       rescue => e
         @config.logger&.error("[PatientHttp::SolidQueue] Failed to update heartbeats: #{e.class} - #{e.message}")
         raise if PatientHttp.testing?

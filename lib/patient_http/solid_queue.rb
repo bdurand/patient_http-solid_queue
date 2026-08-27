@@ -34,6 +34,11 @@ module PatientHttp
   module SolidQueue
     VERSION = File.read(File.join(__dir__, "../../VERSION")).strip
 
+    # Raised when the crash-recovery registry entry for a request cannot be
+    # written. The request is rejected rather than accepted without a durable
+    # record, and the job retries.
+    class RegistrationError < StandardError; end
+
     autoload :CallbackJob, File.join(__dir__, "solid_queue/callback_job")
     autoload :Configuration, File.join(__dir__, "solid_queue/configuration")
     autoload :Context, File.join(__dir__, "solid_queue/context")
@@ -49,13 +54,15 @@ module PatientHttp
     autoload :TaskMonitor, File.join(__dir__, "solid_queue/task_monitor")
     autoload :TaskMonitorThread, File.join(__dir__, "solid_queue/task_monitor_thread")
 
-    @processor = nil
+    @processors = {}
     @configuration = nil
     @after_completion_callbacks = []
     @after_error_callbacks = []
     @external_storage = nil
     @request_handler = nil
     @lifecycle_mutex = Mutex.new
+    @task_monitor = nil
+    @monitor_thread = nil
 
     class << self
       attr_writer :configuration
@@ -109,32 +116,32 @@ module PatientHttp
         @after_error_callbacks << block
       end
 
-      # Check if the processor is running.
+      # Check if any processor is running.
       #
       # @return [Boolean]
       def running?
-        !!@processor&.running?
+        @processors.values.any?(&:running?)
       end
 
-      # Check if the processor is draining (not accepting new requests).
+      # Check if any processor is draining (not accepting new requests).
       #
       # @return [Boolean]
       def draining?
-        !!@processor&.draining?
+        @processors.values.any?(&:draining?)
       end
 
-      # Check if the processor is stopping.
+      # Check if any processor is stopping.
       #
       # @return [Boolean]
       def stopping?
-        !!@processor&.stopping?
+        @processors.values.any?(&:stopping?)
       end
 
-      # Check if the processor is stopped.
+      # Check if all processors are stopped or none have been started.
       #
       # @return [Boolean]
       def stopped?
-        @processor.nil? || @processor.stopped?
+        @processors.values.all?(&:stopped?)
       end
 
       # Get an ExternalStorage instance for storing and fetching payloads.
@@ -152,12 +159,23 @@ module PatientHttp
       #   instance methods, or its fully qualified class name.
       # @param callback_args [#to_h, nil] Arguments to pass to callback
       # @param raise_error_responses [Boolean] If true, treats non-2xx responses as errors
+      # @param processor [Symbol, String, nil] Name of the processor profile that should
+      #   execute the request. Defaults to the request's own processor name or :default.
       # @return [String] the request ID
-      def execute(request, callback:, callback_args: nil, raise_error_responses: false)
+      # @raise [PatientHttp::UnknownProcessorError] if the processor profile is not configured
+      def execute(request, callback:, callback_args: nil, raise_error_responses: false, processor: nil)
         PatientHttp::CallbackValidator.validate!(callback)
         callback_name = callback.is_a?(Class) ? callback.name : callback.to_s
         callback_args = PatientHttp::CallbackValidator.validate_callback_args(callback_args)
         request_id = SecureRandom.uuid
+        processor_name = (processor || request.processor || :default).to_s
+
+        # Catch a misspelled profile name at the call site. A job that names an
+        # unconfigured profile is retried instead, which covers rolling deploys
+        # where the executing process is older than the enqueueing one.
+        unless configuration.processor_profiles.key?(processor_name.to_sym)
+          raise PatientHttp::UnknownProcessorError.new("No processor profile configured for #{processor_name.inspect}")
+        end
 
         encrypted = encrypt(request.as_json)
 
@@ -167,38 +185,59 @@ module PatientHttp
           encrypted
         end
 
-        RequestJob.perform_later(data, callback_name, raise_error_responses, callback_args, request_id)
+        RequestJob.perform_later(data, callback_name, raise_error_responses, callback_args, request_id, processor_name)
 
         request_id
       end
 
-      # Start the processor.
+      # Start a processor for each configured processor profile, along with
+      # the shared crash-recovery monitor.
       #
       # @return [void]
       def start
         @lifecycle_mutex.synchronize do
-          return if @processor && !@processor.stopped?
+          return if @processors.any? && !@processors.values.all?(&:stopped?)
 
-          @processor = PatientHttp::Processor.new(configuration)
-          @processor.observe(ProcessorObserver.new(@processor))
-          @processor.start
+          @task_monitor ||= TaskMonitor.new(
+            configuration,
+            max_connections: -> { @processors.values.sum { |p| p.config.max_connections } }
+          )
+
+          @processors = {}
+          configuration.processor_profiles.each_key do |name|
+            processor = PatientHttp::Processor.new(configuration.processor_config(name), name: name)
+            processor.observe(ProcessorObserver.new(processor, task_monitor: @task_monitor))
+            @processors[name] = processor
+          end
+          @processors.each_value(&:start)
+
+          # A previous run can leave a monitor thread behind if the processors
+          # stopped without going through #stop.
+          @monitor_thread&.stop
+
+          @monitor_thread = TaskMonitorThread.new(
+            configuration,
+            @task_monitor,
+            -> { @processors.values.flat_map(&:tracked_request_ids) }
+          )
+          @monitor_thread.start
         end
 
         register_handler
       end
 
-      # Signal the processor to drain (stop accepting new requests).
+      # Signal all processors to drain (stop accepting new requests).
       #
       # @return [void]
       def quiet
         @lifecycle_mutex.synchronize do
           return unless running?
 
-          @processor.drain
+          @processors.each_value(&:drain)
         end
       end
 
-      # Stop the processor gracefully.
+      # Stop all processors gracefully.
       #
       # @param timeout [Float, nil] maximum time to wait for in-flight requests to complete
       # @return [void]
@@ -208,10 +247,11 @@ module PatientHttp
         end
 
         @lifecycle_mutex.synchronize do
-          return unless @processor
+          return if @processors.empty?
 
-          @processor.stop(timeout: timeout)
-          @processor = nil
+          stop_processors(timeout: timeout)
+          @processors = {}
+          shutdown_shared_services
         end
       end
 
@@ -224,8 +264,9 @@ module PatientHttp
           PatientHttp.unregister_handler(@request_handler)
         end
         @lifecycle_mutex.synchronize do
-          @processor&.stop(timeout: 0)
-          @processor = nil
+          stop_processors(timeout: 0)
+          @processors = {}
+          shutdown_shared_services
         end
         @configuration = nil
         @external_storage = nil
@@ -292,11 +333,55 @@ module PatientHttp
         configuration.encryptor.decrypt(value)
       end
 
-      # Returns the processor instance.
+      # Returns a processor instance by name (internal accessor).
       #
+      # @param name [Symbol, String] the processor name
       # @return [PatientHttp::Processor, nil]
       # @api private
-      attr_accessor :processor
+      def processor(name = :default)
+        @processors[name.to_sym]
+      end
+
+      # Set the default processor (internal, for testing).
+      #
+      # @param value [PatientHttp::Processor, nil]
+      # @api private
+      def processor=(value)
+        if value.nil?
+          @processors.delete(:default)
+        else
+          @processors[:default] = value
+        end
+      end
+
+      private
+
+      # Stop every processor, draining them at the same time so the timeout
+      # bounds the whole shutdown instead of each processor in turn.
+      def stop_processors(timeout:)
+        processors = @processors.values
+        return if processors.empty?
+
+        if processors.one?
+          processors.first.stop(timeout: timeout)
+        else
+          processors.map { |processor| Thread.new { processor.stop(timeout: timeout) } }.each(&:join)
+        end
+      end
+
+      # Stop the shared monitor thread and remove this process from the
+      # registry. Called with the lifecycle mutex held after all processors
+      # have stopped.
+      def shutdown_shared_services
+        @monitor_thread&.stop
+        @monitor_thread = nil
+        begin
+          @task_monitor&.remove_process
+        rescue => e
+          configuration.logger&.error("[PatientHttp::SolidQueue] Failed to remove process registration: #{e.inspect}")
+        end
+        @task_monitor = nil
+      end
     end
   end
 end

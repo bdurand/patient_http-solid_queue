@@ -230,6 +230,34 @@ PatientHttp.execute(request: request, callback: MyCallback, callback_args: {user
 
 See the [patient_http docs](https://github.com/bdurand/patient_http) for the full `Request` and `Response` API reference.
 
+### Named Processors
+
+By default all requests share one processor and one `max_connections` cap. When one process serves workload classes with very different profiles (for example, large slow API calls and small fast webhook deliveries), a burst of one class can consume all of the capacity the other class needs. Named processor profiles isolate them:
+
+```ruby
+PatientHttp::SolidQueue.configure do |config|
+  config.processor(:llm, max_connections: 200, request_timeout: 120)
+  config.processor(:webhooks, max_connections: 64, request_timeout: 10)
+end
+```
+
+Each profile runs as an independent processor in the process, with its own capacity, timeouts, and threads. Profile options override the top-level configuration; anything not overridden (secrets, preprocessors, payload stores, encryption, logger) is shared. The `:default` processor always exists; declare `config.processor(:default, ...)` to override its options.
+
+Route a request to a processor in any of these ways:
+
+```ruby
+# Explicit option on execute
+PatientHttp::SolidQueue.execute(request, callback: MyCallback, processor: :llm)
+
+# On the request itself (survives serialization, retries, and crash recovery)
+request = PatientHttp::Request.new(:get, url, processor: :llm)
+
+# Through a request template
+template = PatientHttp::RequestTemplate.new(base_url: url, processor: :llm)
+```
+
+The processor name is serialized into the job arguments, so Active Job retries and crash recovery keep their routing. A job that names a processor that is not configured in the executing process raises `PatientHttp::UnknownProcessorError` and is retried with backoff; this makes new profile names safe to roll out gradually. Jobs enqueued by older gem versions run on the `:default` processor.
+
 ### Using Request Templates
 
 For repeated requests to the same API, use `PatientHttp::RequestTemplate` to share configuration:
@@ -419,6 +447,16 @@ PatientHttp::SolidQueue.configure do |config|
   # Queue name for RequestJob and CallbackJob (default: nil, Active Job default)
   config.queue_name = "async_http"
 
+  # Number of threads that decode responses and deliver results (default: 2)
+  config.completion_threads = 2
+
+  # Maximum connections per host (default: nil, unlimited)
+  config.max_connections_per_host = 32
+
+  # Named processor profiles for workload isolation (see Named Processors)
+  config.processor(:llm, max_connections: 200, request_timeout: 120)
+  config.processor(:webhooks, max_connections: 64, request_timeout: 10)
+
   # Custom logger (defaults to SolidQueue.logger)
   config.logger = Rails.logger
 
@@ -440,6 +478,9 @@ See the [Configuration](lib/patient_http/solid_queue/configuration.rb) class for
 - `retries`: Number of times to retry a failed request before calling the error callback.
 - `max_response_size`: Set this to limit the maximum size of HTTP responses. This helps prevent excessive memory usage from unexpectedly large responses. Responses need to be serialized as Active Job arguments and very large responses may cause performance issues. If a response body is text content, it will be compressed to save space. However, binary content needs to be Base64 encoded which increases size by ~33%.
 - `payload_store_threshold`: Lower this if your queue backend struggles with large payloads; higher values avoid extra external storage reads/writes.
+- `max_connections_per_host`: Bounds sockets per host. Verify the process file descriptor limit covers `max_connections` plus pooled idle host connections plus the application's own connections; raise the limit if needed.
+- `completion_threads`: Number of threads that decode responses and deliver results (default 2). Increase when result callbacks do heavier work and completions back up behind them. Size the Active Record connection pool to cover these threads plus the task monitor thread in addition to the worker threads.
+- `shutdown_timeout`: Must be below the process supervisor's termination window so the drain finishes before a hard kill. The default derives it from Solid Queue's own shutdown timeout; check any additional supervisor stop timeout as well.
 - `heartbeat_interval` and `orphan_threshold`: For high-churn workloads, keep `heartbeat_interval` as large as your recovery SLO allows (while still less than `orphan_threshold`) to reduce write/update pressure on monitoring tables. If Solid Queue uses PostgreSQL and request volume is high, tune autovacuum for the queue database tables because `inflight_requests` is intentionally insert/update/delete heavy.
 
 > [!IMPORTANT]

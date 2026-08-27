@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "delegate"
+
 module PatientHttp
   module SolidQueue
     # Configuration for the Solid Queue Async HTTP gem.
@@ -64,11 +66,70 @@ module PatientHttp
 
         super(**pool_options)
 
+        @processor_profiles = {default: {}}
         self.queue_name = queue_name
         self.heartbeat_interval = heartbeat_interval
         self.orphan_threshold = orphan_threshold
         self.payload_store_threshold = payload_store_threshold || DEFAULT_PAYLOAD_STORE_THRESHOLD
         self.on_retries_exhausted = on_retries_exhausted
+      end
+
+      # Declare a named processor profile.
+      #
+      # Each profile becomes an independent processor with its own capacity,
+      # timeouts, and threads. Options are overrides applied on top of this
+      # configuration's HTTP pool options. Calling this with no options
+      # declares a profile that inherits every option. Requests select a
+      # processor with the +processor:+ option on
+      # +PatientHttp::SolidQueue.execute+ (or on the request itself). The
+      # +:default+ profile always exists; declaring it overrides options for
+      # the default processor.
+      #
+      # @example
+      #   PatientHttp::SolidQueue.configure do |config|
+      #     config.processor(:llm, max_connections: 200, request_timeout: 120)
+      #     config.processor(:webhooks, max_connections: 64, request_timeout: 10)
+      #   end
+      #
+      # @param name [Symbol, String] the processor name
+      # @param options [Hash] overrides for PatientHttp::Configuration options
+      # @return [Hash] the stored options for the profile
+      def processor(name, **options)
+        key = normalize_processor_name(name)
+        @processor_profiles[key] = normalize_profile_options!(options)
+      end
+
+      # Read back the options declared for a named processor profile.
+      #
+      # @param name [Symbol, String] the processor name
+      # @return [Hash, nil] the stored options, or nil if the profile is not declared
+      def processor_options(name)
+        @processor_profiles[normalize_processor_name(name)]
+      end
+
+      # All declared processor profiles. Always includes :default.
+      #
+      # @return [Hash{Symbol => Hash}] profile options by processor name
+      def processor_profiles
+        @processor_profiles.dup
+      end
+
+      # Build the effective configuration for a named processor. The default
+      # profile with no overrides is this configuration itself; other profiles
+      # get a view of this configuration with their overrides applied, so they
+      # share secrets, preprocessors, payload stores, and encryption.
+      #
+      # @param name [Symbol, String] the processor name
+      # @return [PatientHttp::Configuration] the configuration for the processor
+      # @raise [ArgumentError] if the profile is not declared
+      def processor_config(name)
+        key = normalize_processor_name(name)
+        profile = @processor_profiles[key]
+        raise ArgumentError.new("Unknown processor profile: #{name.inspect}") unless profile
+
+        return self if profile.empty?
+
+        ProfileConfiguration.new(self, profile)
       end
 
       def payload_store_threshold=(value)
@@ -121,8 +182,22 @@ module PatientHttp
           "heartbeat_interval" => heartbeat_interval,
           "orphan_threshold" => orphan_threshold,
           "queue_name" => queue_name,
-          "on_retries_exhausted" => on_retries_exhausted ? "defined" : nil
+          "on_retries_exhausted" => on_retries_exhausted ? "defined" : nil,
+          "processor_profiles" => processor_profiles.keys.map(&:to_s)
         )
+      end
+
+      # View of a base configuration with a profile's option overrides applied.
+      # Everything not overridden (secrets, preprocessors, payload stores,
+      # encryption, logging) delegates to the base configuration, so all
+      # processors share those registries.
+      class ProfileConfiguration < SimpleDelegator
+        def initialize(base_configuration, overrides)
+          super(base_configuration)
+          overrides.each do |key, value|
+            define_singleton_method(key) { value }
+          end
+        end
       end
 
       private
@@ -130,6 +205,28 @@ module PatientHttp
       def apply_queue_name(name)
         PatientHttp::SolidQueue::RequestJob.queue_as(name)
         PatientHttp::SolidQueue::CallbackJob.queue_as(name)
+      end
+
+      # Profile options must be valid PatientHttp::Configuration options. A
+      # throwaway configuration exercises each option's own validation and
+      # normalization, so the stored value is what the writer would have
+      # produced rather than the raw input.
+      def normalize_profile_options!(options)
+        return options if options.empty?
+
+        probe = PatientHttp::Configuration.new(**options)
+        options.to_h do |key, value|
+          [key, probe.respond_to?(key) ? probe.public_send(key) : value]
+        end
+      rescue ArgumentError => e
+        raise ArgumentError.new("Invalid processor profile options: #{e.message}")
+      end
+
+      def normalize_processor_name(name)
+        key = name.to_s
+        raise ArgumentError.new("processor name cannot be empty") if key.empty?
+
+        key.to_sym
       end
 
       def validate_heartbeat_and_threshold
