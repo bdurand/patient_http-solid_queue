@@ -2,7 +2,7 @@
 
 class TestController < ApplicationController
   def index
-    render file: Rails.root.join("public/index.html"), layout: false
+    render layout: false
   end
 
   def run_jobs
@@ -11,6 +11,7 @@ class TestController < ApplicationController
     delay = params.fetch(:delay, 0).to_f
     timeout = params.fetch(:timeout, 30).to_f
     delay_drift = params.fetch(:delay_drift, 0).to_f.clamp(0.0, 100.0)
+    processor = ProcessorProfiles.resolve(params[:processor])
 
     StatusReport.new("Asynchronous").reset!
     StatusReport.new("Synchronous").reset!
@@ -34,7 +35,8 @@ class TestController < ApplicationController
         PatientHttp.get(
           "#{base_url}/slow?delay=#{drifted_delay.call}",
           callback: StatusReport::Callback,
-          timeout: timeout
+          timeout: timeout,
+          processor: processor
         )
       }
     end
