@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.1
+
+### Fixed
+
+- The request handler is no longer unregistered when the processors stop. SolidQueue runs its worker stop hooks before the execution pool is drained, so a job that submitted a request during the shutdown window raised `No request handler registered` and the request was lost. The handler now stays registered for the life of the process, and a request submitted after the processors have stopped is enqueued as a job and executed by the next process.
+
 ## 1.2.0
 
 ### Added
