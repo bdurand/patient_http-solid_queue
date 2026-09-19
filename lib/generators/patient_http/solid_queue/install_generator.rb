@@ -1,0 +1,139 @@
+# frozen_string_literal: true
+
+require "rails/generators/base"
+require "rails/generators/migration"
+require "rails/generators/active_record"
+
+module PatientHttp
+  module SolidQueue
+    # Installs the crash-recovery migration and a commented initializer.
+    #
+    #   rails generate patient_http:solid_queue:install
+    #
+    # The migration has to run on the database Solid Queue uses. The generator
+    # finds that database in config/database.yml and copies the migration into
+    # its migrations path, so the multi-database case needs no extra arguments.
+    # Pass --database to name it explicitly.
+    class InstallGenerator < ::Rails::Generators::Base
+      include ::Rails::Generators::Migration
+
+      source_root File.expand_path("templates", __dir__)
+
+      desc "Copies the patient_http-solid_queue migration and creates a commented initializer."
+
+      class_option :database,
+        type: :string,
+        default: nil,
+        desc: "Name of the database Solid Queue uses (detected from config/database.yml when omitted)"
+
+      class_option :skip_initializer,
+        type: :boolean,
+        default: false,
+        desc: "Skip creating config/initializers/patient_http.rb"
+
+      class << self
+        # @param dirname [String] the directory the migration is copied into
+        # @return [String] the timestamp prefix for the new migration
+        def next_migration_number(dirname)
+          ::ActiveRecord::Generators::Base.next_migration_number(dirname)
+        end
+      end
+
+      def copy_migration
+        migration_template(
+          "create_patient_http_solid_queue_tables.rb.erb",
+          File.join(migration_directory, "create_patient_http_solid_queue_tables.rb"),
+          migration_version: migration_version
+        )
+      end
+
+      def create_initializer
+        return if options[:skip_initializer]
+
+        template("initializer.rb", "config/initializers/patient_http.rb")
+      end
+
+      def show_next_steps
+        say("")
+        say("patient_http-solid_queue is installed.", :green)
+        say("")
+        say("Run the migration to create the crash-recovery tables:")
+        say("")
+        say("  bin/rails #{migrate_task}")
+        say("")
+        say("Nothing else is required: the request handler is registered when the gem")
+        say("loads and the processor starts and stops with your Solid Queue workers.")
+        say("")
+        say("Make a request from anywhere in your application:")
+        say("")
+        say("  PatientHttp.get(url, callback: MyCallback, callback_args: {id: 1})")
+        say("")
+      end
+
+      private
+
+      # The migrations path of the database Solid Queue uses. Falls back to the
+      # application's primary migrations path for single-database applications.
+      #
+      # @return [String]
+      def migration_directory
+        @migration_directory ||= begin
+          path = Array(database_config&.migrations_paths).first
+          path || "db/migrate"
+        end
+      end
+
+      # The database configuration Solid Queue runs against.
+      #
+      # Preference order: an explicit --database, a database named "queue"
+      # (the Rails default for Solid Queue), any database whose name mentions
+      # the queue, then the primary database.
+      #
+      # @return [ActiveRecord::DatabaseConfigurations::DatabaseConfig, nil]
+      def database_config
+        return @database_config if defined?(@database_config)
+
+        @database_config = begin
+          configs = ::ActiveRecord::Base.configurations.configs_for(env_name: ::Rails.env)
+
+          if options[:database]
+            named = configs.find { |config| config.name == options[:database] }
+            unless named
+              raise ::Rails::Generators::Error.new(
+                "No #{options[:database].inspect} database is configured for the " \
+                "#{::Rails.env} environment in config/database.yml."
+              )
+            end
+            named
+          else
+            configs.find { |config| config.name == "queue" } ||
+              configs.find { |config| config.name.to_s.include?("queue") } ||
+              configs.find { |config| config.name == "primary" }
+          end
+        rescue => e
+          raise e if e.is_a?(::Rails::Generators::Error)
+
+          # Without a readable database configuration, fall back to db/migrate
+          # and let the developer move the file if it landed in the wrong place.
+          say("Could not read config/database.yml (#{e.class}); using db/migrate.", :yellow)
+          nil
+        end
+      end
+
+      # The rake task that runs the migration for the detected database.
+      #
+      # @return [String]
+      def migrate_task
+        name = database_config&.name
+        return "db:migrate" if name.nil? || name == "primary"
+
+        "db:migrate:#{name}"
+      end
+
+      # @return [String] the Rails version stamp for the generated migration class
+      def migration_version
+        "[#{::ActiveRecord::VERSION::MAJOR}.#{::ActiveRecord::VERSION::MINOR}]"
+      end
+    end
+  end
+end

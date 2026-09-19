@@ -9,11 +9,71 @@ RSpec.describe PatientHttp::SolidQueue do
     end
   end
 
+  describe "setup" do
+    let(:callback_class) do
+      klass = Class.new do
+        def on_complete(response)
+        end
+
+        def on_error(error)
+        end
+      end
+      stub_const("TestCallback", klass)
+      klass
+    end
+
+    it "registers the request handler when the gem is loaded" do
+      expect(PatientHttp.handler_registered?).to be(true)
+    end
+
+    it "registers itself as the PatientHttp configuration provider" do
+      expect(PatientHttp.configuration_provider).to be(described_class)
+      expect(PatientHttp.configuration).to be_a(PatientHttp::SolidQueue::Configuration)
+    end
+
+    it "enqueues requests made through PatientHttp without any configure call" do
+      PatientHttp.get("https://example.com/unconfigured", callback: callback_class)
+
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:job]).to eq(PatientHttp::SolidQueue::RequestJob)
+    end
+
+    it "keeps the handler registered after the processor stops" do
+      described_class.start
+      described_class.stop(timeout: 0)
+
+      expect(PatientHttp.handler_registered?).to be(true)
+    end
+  end
+
   describe ".configure" do
     after do
       described_class.reset_configuration!
       PatientHttp.instance_variable_set(:@module_secrets, {})
       PatientHttp.default_configuration = nil
+    end
+
+    it "yields the same configuration on every call so options accumulate" do
+      described_class.configure { |c| c.max_connections = 512 }
+      described_class.configure { |c| c.request_timeout = 120 }
+
+      expect(described_class.configuration.max_connections).to eq(512)
+      expect(described_class.configuration.request_timeout).to eq(120)
+    end
+
+    it "is reachable through PatientHttp.configure without naming the integration" do
+      config = PatientHttp.configure { |c| c.max_connections = 321 }
+
+      expect(config).to be_a(PatientHttp::SolidQueue::Configuration)
+      expect(described_class.configuration.max_connections).to eq(321)
+    end
+
+    it "applies module-level secrets registered after the configuration exists" do
+      described_class.configure { |c| }
+
+      PatientHttp.register_secret("late_secret", "s3cret")
+
+      expect(described_class.configuration.secret_manager.include?("late_secret")).to be(true)
     end
 
     it "sets the built configuration as the PatientHttp default configuration" do

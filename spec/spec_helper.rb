@@ -46,7 +46,7 @@ ActiveRecord::Base.establish_connection(
 # Stub SolidQueue lifecycle hook methods that get called when the gem loads
 # (SolidQueue.on_worker_start / on_worker_stop are defined by solid_queue itself)
 
-require_relative "../db/migrate/20260216000000_create_solid_queue_async_http_tables"
+require_relative "../db/migrate/20260216000000_create_patient_http_solid_queue_tables"
 
 # Silence Solid Queue logs during test runs.
 SolidQueue.logger = quiet_logger if SolidQueue.respond_to?(:logger=)

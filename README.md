@@ -46,7 +46,16 @@ The async processor runs in a dedicated thread within your Solid Queue worker pr
 
 ## Quick Start
 
-### 1. Create a Callback Service
+### 1. Install The Gem
+
+```bash
+bin/rails generate patient_http:solid_queue:install
+bin/rails db:migrate
+```
+
+See [Installation](#installation) for the details, including multi-database setups. Loading the gem registers the request handler and hooks the processor into Solid Queue's startup and shutdown, so there is nothing else to wire up. Every option has a working default; see [Configuration](#configuration) to change any of them.
+
+### 2. Create a Callback Service
 
 Define a callback service class with `on_complete` and `on_error` methods:
 
@@ -69,7 +78,7 @@ class FetchDataCallback
 end
 ```
 
-### 2. Make HTTP Requests
+### 3. Make HTTP Requests
 
 Make HTTP requests from anywhere in your code using `PatientHttp`:
 
@@ -82,7 +91,7 @@ PatientHttp.get(
 )
 ```
 
-### 3. That's It!
+### 4. That's It!
 
 The request will be enqueued as an Active Job and passed to a [PatientHttp](https://github.com/bdurand/patient_http) processor to execute asynchronously. When the HTTP request completes, your callback's `on_complete` method is executed in another Active Job.
 
@@ -235,7 +244,7 @@ See the [patient_http docs](https://github.com/bdurand/patient_http) for the ful
 By default all requests share one processor and one `max_connections` cap. When one process serves workload classes with very different profiles (for example, large slow API calls and small fast webhook deliveries), a burst of one class can consume all of the capacity the other class needs. Named processor profiles isolate them:
 
 ```ruby
-PatientHttp::SolidQueue.configure do |config|
+PatientHttp.configure do |config|
   config.processor(:llm, max_connections: 200, request_timeout: 120)
   config.processor(:webhooks, max_connections: 64, request_timeout: 10)
 end
@@ -246,10 +255,10 @@ Each profile runs as an independent processor in the process, with its own capac
 Route a request to a processor in any of these ways:
 
 ```ruby
-# Explicit option on execute
-PatientHttp::SolidQueue.execute(request, callback: MyCallback, processor: :llm)
+# Explicit option on the request
+PatientHttp.get(url, callback: MyCallback, processor: :llm)
 
-# On the request itself (survives serialization, retries, and crash recovery)
+# On a request object (survives serialization, retries, and crash recovery)
 request = PatientHttp::Request.new(:get, url, processor: :llm)
 
 # Through a request template
@@ -379,7 +388,7 @@ Requests and responses from asynchronous HTTP requests may be stored in your que
 Encryption is configured on the parent `patient_http` gem. You can set an `encryption_key` to automatically encrypt and decrypt request and response data using `ActiveSupport::MessageEncryptor`:
 
 ```ruby
-PatientHttp::SolidQueue.configure do |config|
+PatientHttp.configure do |config|
   config.encryption_key = Rails.application.credentials.patient_http_secret
 end
 ```
@@ -388,10 +397,12 @@ See the [patient_http gem](https://github.com/bdurand/patient_http) for full doc
 
 ## Configuration
 
-The gem can be configured globally in an initializer:
+All configuration is optional. Set options in an initializer through `PatientHttp.configure`, which yields this gem's configuration when it is loaded. `PatientHttp::SolidQueue.configure` is equivalent; using `PatientHttp.configure` keeps the initializer free of any reference to the job system.
+
+The same configuration object is yielded every time, so options accumulate and several initializers can each contribute without overwriting one another.
 
 ```ruby
-PatientHttp::SolidQueue.configure do |config|
+PatientHttp.configure do |config|
   # Maximum concurrent HTTP requests (default: 256)
   config.max_connections = 256
 
@@ -467,7 +478,7 @@ PatientHttp::SolidQueue.configure do |config|
 end
 ```
 
-See the [Configuration](lib/patient_http/solid_queue/configuration.rb) class for all available options.
+See the [Configuration](lib/patient_http/solid_queue/configuration.rb) class for all available options, and the [patient_http docs](https://github.com/bdurand/patient_http#configuration) for the HTTP options this gem inherits.
 
 ### Tuning Tips
 
@@ -557,33 +568,16 @@ Then execute:
 bundle install
 ```
 
-Install and run the gem migrations:
+Run the install generator and migrate:
 
 ```bash
-bin/rails patient_http_solid_queue:install:migrations
+bin/rails generate patient_http:solid_queue:install
 bin/rails db:migrate
 ```
 
-The database tables are used for crash recovery and monitoring of in-flight requests and need to be added to the same database that Solid Queue uses.
+The generator creates the migration for the crash-recovery and in-flight request tables, plus a commented initializer you can edit or delete.
 
-By default, this install task copies migrations to the `queue` database migration path (typically `db/queue_migrate`).
-If your Solid Queue database name is different, override it with `DATABASE=your_database_name`.
-
-For a typical multi-database setup, ensure your `queue` database config defines its own migration path:
-
-```yaml
-development:
-  primary:
-    adapter: sqlite3
-    database: storage/development.sqlite3
-  queue:
-    adapter: sqlite3
-    database: storage/development_queue.sqlite3
-    migrations_paths:
-      - db/queue_migrate
-```
-
-PostgreSQL example:
+Those tables have to live in the same database Solid Queue uses. The generator reads `config/database.yml`, finds that database, and writes the migration into its migrations path, so a multi-database application needs no extra arguments. The generator prints the exact migrate command for the database it chose, which is `bin/rails db:migrate:queue` for a typical setup like this:
 
 ```yaml
 development:
@@ -597,19 +591,15 @@ development:
       - db/queue_migrate
 ```
 
-Then run:
+Name the database explicitly if it is not called `queue` and the generator cannot work it out:
 
 ```bash
-bin/rails patient_http_solid_queue:install:migrations
-bin/rails db:queue:migrate
+bin/rails generate patient_http:solid_queue:install --database=solid_queue
 ```
 
-If your Solid Queue database is not named `queue`, pass its name explicitly when installing migrations:
+Pass `--skip-initializer` to generate only the migration.
 
-```bash
-bin/rails patient_http_solid_queue:install:migrations DATABASE=solid_queue
-bin/rails db:migrate:solid_queue
-```
+Nothing else is required. Loading the gem registers the request handler and hooks the processor into Solid Queue's worker startup and shutdown, so there is no method you have to remember to call.
 
 ## Contributing
 

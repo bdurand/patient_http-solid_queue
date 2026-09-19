@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.3.0
+
+### Added
+
+- Install generator: `rails generate patient_http:solid_queue:install` copies the crash-recovery migration and writes a commented `config/initializers/patient_http.rb`. It reads `config/database.yml`, finds the database Solid Queue uses, writes the migration into that database's migrations path, and prints the matching migrate command, so a multi-database application needs no extra arguments. Pass `--database` to name the database explicitly, or `--skip-initializer` for the migration alone.
+
+### Fixed
+
+- **The shipped migration could not be run.** Its file was named `create_solid_queue_async_http_tables.rb` while the class inside it was `CreatePatientHttpSolidQueueTables`, so `db:migrate` raised `NameError: uninitialized constant CreateSolidQueueAsyncHttpTables` after copying it with `patient_http_solid_queue:install:migrations`. The file is now named to match its class. Applications that worked around this by renaming the file themselves are unaffected.
+
+### Changed
+
+- **No setup call is required.** The request handler is registered when the gem is loaded, so `PatientHttp.get` and the other request methods work in every process that requires the gem, configured or not. Previously `PatientHttp::SolidQueue.configure` or `register_handler` had to be called first or requests raised, which made a missing or unloaded initializer fail at dispatch time.
+- `PatientHttp.configure` and `PatientHttp.configuration` resolve to this gem's configuration, so application code never has to name the integration to configure it. `PatientHttp::SolidQueue.configure` remains equivalent.
+- **`configure` now accumulates instead of replacing.** It yields the one configuration object for the process rather than building a new one each time, so several initializers can each contribute options and a second call no longer discards what an earlier one registered. Code that relied on `configure` resetting the configuration should call `reset_configuration!` first.
+- The configuration is created on first use and published to `PatientHttp` at that moment. Previously it was published only inside `configure`, so a process that started a processor without calling `configure` never received module level secrets registered with `PatientHttp.register_secret`.
+- The request handler stays registered for the life of the process. `stop` no longer unregisters it, so a request made while the process is shutting down is enqueued for another process to run instead of raising.
+- `payload_store_threshold` moved to `PatientHttp::Configuration`, next to `register_payload_store`. It is inherited, so `config.payload_store_threshold` is unchanged. `PatientHttp::SolidQueue::Configuration::DEFAULT_PAYLOAD_STORE_THRESHOLD` now points at the base gem's constant and is deprecated.
+
 ## 1.2.0
 
 ### Added
