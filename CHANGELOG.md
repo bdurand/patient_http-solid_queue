@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 1.3.0
 
+### Upgrading
+
+If this is a new installation, run `rails generate patient_http:solid_queue:install` and skip this section. If you installed an earlier version with `patient_http_solid_queue:install:migrations`, check your migration paths (`db/queue_migrate` for a typical multi-database setup, otherwise `db/migrate`) before running the generator:
+
+- **A file named `<timestamp>_create_solid_queue_async_http_tables.patient_http_solid_queue.rb`, and the tables were never created.** This is the broken migration described under Fixed below; it raises `NameError: uninitialized constant CreateSolidQueueAsyncHttpTables` and has never run. Delete it, then run the generator and migrate. The generator does not detect this file, because it is installed under a different migration name than the one this version ships.
+- **You renamed that file to match its class.** Nothing to do. The generator finds the installed migration and leaves it alone, so it is safe to run.
+- **You renamed the class to `CreateSolidQueueAsyncHttpTables` instead, so the tables exist under the old file name.** The generator does not detect this file either, and the migration it writes would fail with a "table already exists" error. Keep the migration you already have and delete the one the generator writes; there is no flag to skip it.
+
+No application code has to change. `PatientHttp::SolidQueue.configure` and `PatientHttp::SolidQueue.execute` still work, and a `register_handler` call left in an initializer is now redundant rather than wrong. The one behavior change to check is `configure`, which accumulates instead of replacing; see Changed below.
+
 ### Added
 
 - Install generator: `rails generate patient_http:solid_queue:install` copies the crash-recovery migration and writes a commented `config/initializers/patient_http.rb`. It reads `config/database.yml`, finds the database Solid Queue uses, writes the migration into that database's migrations path, and prints the matching migrate command, so a multi-database application needs no extra arguments. Pass `--database` to name the database explicitly, or `--skip-initializer` for the migration alone.

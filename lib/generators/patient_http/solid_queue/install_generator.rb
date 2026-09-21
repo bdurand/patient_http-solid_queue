@@ -40,6 +40,12 @@ module PatientHttp
       end
 
       def copy_migration
+        existing = existing_migration
+        if existing
+          say("Skipping the migration: #{existing} is already installed.", :yellow)
+          return
+        end
+
         migration_template(
           "create_patient_http_solid_queue_tables.rb.erb",
           File.join(migration_directory, "create_patient_http_solid_queue_tables.rb"),
@@ -79,8 +85,45 @@ module PatientHttp
       def migration_directory
         @migration_directory ||= begin
           path = Array(database_config&.migrations_paths).first
+
+          if path.nil? && !database_config.nil? && database_config.name != "primary"
+            say(
+              "The #{database_config.name.inspect} database does not define migrations_paths, " \
+              "so the migration is being written to db/migrate, which it shares with the primary " \
+              "database. Add a migrations_paths (for example db/queue_migrate) to that database in " \
+              "config/database.yml and move the migration there.",
+              :yellow
+            )
+          end
+
           path || "db/migrate"
         end
+      end
+
+      # Any copy of this gem's migration that is already installed, under any of
+      # the application's migration paths.
+      #
+      # `patient_http_solid_queue:install:migrations` copies it with the engine
+      # scope in the file name (`..._create_patient_http_solid_queue_tables.
+      # patient_http_solid_queue.rb`), which Rails' own duplicate check in
+      # `migration_template` does not match. Writing a second copy would give two
+      # migrations the same migration name and make every later `db:migrate`
+      # raise ActiveRecord::DuplicateMigrationNameError.
+      #
+      # @return [String, nil] the path of the installed migration, relative to the
+      #   application root, or nil if there is none
+      def existing_migration
+        paths = ::Rails.application.paths["db/migrate"].to_a
+        paths |= [migration_directory]
+
+        found = paths.flat_map do |path|
+          # Paths from Rails::Paths may be relative or already absolute.
+          dir = File.expand_path(path, destination_root)
+          Dir[File.join(dir, "[0-9]*_create_patient_http_solid_queue_tables*.rb")]
+        end.first
+        return nil unless found
+
+        relative_to_original_destination_root(found)
       end
 
       # The database configuration Solid Queue runs against.
@@ -126,6 +169,12 @@ module PatientHttp
       def migrate_task
         name = database_config&.name
         return "db:migrate" if name.nil? || name == "primary"
+
+        # Only name the database when the migration actually went into that
+        # database's own migrations path. When it fell back to db/migrate,
+        # `db:migrate:<name>` would run every migration in db/migrate against
+        # that database, so run the task that migrates every database instead.
+        return "db:migrate" if Array(database_config.migrations_paths).first.nil?
 
         "db:migrate:#{name}"
       end

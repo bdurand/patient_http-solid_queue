@@ -2,6 +2,24 @@ source "https://rubygems.org"
 
 gemspec
 
+# Develop against a sibling checkout of patient_http when there is one, so both
+# gems can be changed together without releasing the base gem first. Override the
+# location with PATIENT_HTTP_PATH. Without a checkout the released gem is used, so
+# nothing here has to change in CI.
+#
+# This is deliberately kept out of the gemfiles appraisal generates: those files are
+# committed and run in CI, where there is no sibling checkout to point at. To run an
+# appraisal against a local patient_http, set BUNDLE_GEMFILE to this Gemfile instead.
+unless ENV["DEPENDABOT"]
+  unless defined?(::Appraisal::Gemfile) && is_a?(::Appraisal::Gemfile)
+    patient_http_path = ENV.fetch("PATIENT_HTTP_PATH", "../patient_http")
+
+    if File.directory?(File.expand_path(patient_http_path, __dir__))
+      gem "patient_http", path: patient_http_path
+    end
+  end
+end
+
 # Exclude development-only gems from dependabot.
 unless ENV["DEPENDABOT"]
   gem "webmock", "~> 3.26"

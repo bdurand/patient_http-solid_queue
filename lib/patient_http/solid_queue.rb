@@ -70,6 +70,13 @@ module PatientHttp
       # @param config [Configuration, nil] the configuration to use
       # @return [void]
       def configuration=(config)
+        unless config.nil? || config.is_a?(Configuration)
+          raise ArgumentError.new(
+            "PatientHttp::SolidQueue requires a PatientHttp::SolidQueue::Configuration, " \
+            "got: #{config.class}. Assign nil to discard the configuration."
+          )
+        end
+
         PatientHttp.default_configuration = config
       end
 
@@ -103,7 +110,21 @@ module PatientHttp
       #
       # @return [Configuration]
       def configuration
-        PatientHttp.configuration
+        config = PatientHttp.configuration
+
+        # PatientHttp.default_configuration= can be assigned directly, bypassing
+        # the setter above. Fail with the reason rather than with a NoMethodError
+        # from the first Solid Queue specific option that is read.
+        unless config.is_a?(Configuration)
+          raise TypeError.new(
+            "PatientHttp.configuration is a #{config.class}, not a " \
+            "PatientHttp::SolidQueue::Configuration. Set PatientHttp.default_configuration " \
+            "to nil and configure through PatientHttp.configure so the configuration is built " \
+            "by this integration."
+          )
+        end
+
+        config
       end
 
       # Build a new configuration instance. Called by `PatientHttp` when it needs
