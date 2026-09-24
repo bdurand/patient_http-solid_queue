@@ -43,6 +43,40 @@ RSpec.describe PatientHttp::SolidQueue::TaskHandler do
     end
   end
 
+  describe "payload storage threshold" do
+    before do
+      TestPayloadStore.clear!
+      PatientHttp::SolidQueue.configure do |c|
+        c.register_payload_store(:test_store, adapter: :test_store)
+      end
+    end
+
+    after { PatientHttp::SolidQueue.reset_configuration! }
+
+    let(:response) do
+      response = instance_double(PatientHttp::Response)
+      allow(response).to receive(:as_json).and_return({"status" => 200})
+      response
+    end
+
+    it "uses the base configuration threshold by default" do
+      handler.on_complete(response, "TestHandlerCallback")
+
+      data = ActiveJob::Base.queue_adapter.enqueued_jobs.last[:args][0]
+      expect(PatientHttp::ExternalStorage.storage_ref?(data)).to be(false)
+    end
+
+    it "uses the threshold from the given processor configuration" do
+      config = PatientHttp::SolidQueue.configuration
+      config.processor(:small, payload_store_threshold: 1)
+      handler = described_class.new(job_data, config: config.processor_config(:small))
+      handler.on_complete(response, "TestHandlerCallback")
+
+      data = ActiveJob::Base.queue_adapter.enqueued_jobs.last[:args][0]
+      expect(PatientHttp::ExternalStorage.storage_ref?(data)).to be(true)
+    end
+  end
+
   describe "stored request payload cleanup" do
     let(:response) do
       response = instance_double(PatientHttp::Response)
@@ -101,13 +135,13 @@ RSpec.describe PatientHttp::SolidQueue::TaskHandler do
 
     it "does not delete arguments of other job classes" do
       stored_ref = PatientHttp::SolidQueue.external_storage.store({"some" => "data"})
-      handler = described_class.new(
+      handler = described_class.new({
         "job_class" => "TestJob",
         "job_id" => "other-job-id",
         "arguments" => [stored_ref],
         "queue_name" => "default",
         "executions" => 0
-      )
+      })
       handler.on_complete(response, "TestHandlerCallback")
 
       expect(TestPayloadStore.payloads).not_to be_empty

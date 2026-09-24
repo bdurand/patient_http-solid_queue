@@ -2,21 +2,32 @@
 
 module PatientHttp
   module SolidQueue
-    # Helper methods for executing HTTP requests asynchronously.
+    # Runs HTTP requests on a processor in the current process.
     class RequestExecutor
       class << self
-        # Execute the request directly on the async processor.
+        # Hands the request to the async processor.
         #
-        # @param request [PatientHttp::Request] the HTTP request to execute
-        # @param callback [Class, String] Callback service class or its fully qualified class name
-        # @param active_job_data [Hash, nil] Active Job serialized hash with "job_class" and "arguments" keys
-        # @param synchronous [Boolean] If true, runs the request inline (for testing)
-        # @param callback_args [#to_h, nil] Arguments to pass to callback
-        # @param raise_error_responses [Boolean] If true, treats non-2xx responses as errors
-        # @param request_id [String, nil] Unique request ID for tracking
-        # @param processor_name [Symbol, String, nil] Name of the processor profile to run
-        #   the request on. Defaults to the request's own processor name or :default.
-        # @return [String] the request ID
+        # @param request [PatientHttp::Request] The HTTP request to execute.
+        # @param callback [Class, String] The callback service class, or its
+        #   fully qualified class name.
+        # @param active_job_data [Hash, nil] The serialized Active Job, with
+        #   `"job_class"` and `"arguments"` keys. Defaults to the current job.
+        # @param synchronous [Boolean] If `true`, runs the request inline. Use
+        #   this in tests.
+        # @param callback_args [#to_h, nil] Arguments to pass to the callback.
+        # @param raise_error_responses [Boolean, nil] If `true`, treats non-2xx
+        #   responses as errors. If `nil`, uses the processor profile's
+        #   `raise_error_responses` option.
+        # @param request_id [String, nil] A unique request ID for tracking.
+        # @param processor_name [Symbol, String, nil] The name of the processor
+        #   profile that runs the request. Defaults to the request's processor
+        #   name, or `:default`.
+        # @return [String] The request ID.
+        # @raise [ArgumentError] If the Active Job data is missing or invalid.
+        # @raise [PatientHttp::UnknownProcessorError] If the processor profile
+        #   isn't configured.
+        # @raise [PatientHttp::NotRunningError] If the processor isn't running.
+        # @raise [PatientHttp::MaxCapacityError] If the processor is at capacity.
         # @api private
         def execute(
           request,
@@ -24,19 +35,26 @@ module PatientHttp
           active_job_data: nil,
           synchronous: false,
           callback_args: nil,
-          raise_error_responses: false,
+          raise_error_responses: nil,
           request_id: nil,
           processor_name: nil
         )
           active_job_data = validate_active_job_data(active_job_data)
-          task_handler = TaskHandler.new(active_job_data)
-          config = PatientHttp::SolidQueue.configuration
 
           # Resolve the processor profile up front so the task is built with
-          # the options of the processor that will run it. An unknown name
+          # the options of the processor that will run it. A running processor
+          # already holds its built profile configuration. An unknown name
           # falls back to the base configuration here and is reported below.
           name = (processor_name || request.processor || :default).to_sym
-          profile_config = config.processor_profiles.key?(name) ? config.processor_config(name) : config
+          processor = PatientHttp::SolidQueue.processor(name)
+          declared_config = PatientHttp::SolidQueue.processor_config_for(name)
+          profile_config = declared_config || PatientHttp::SolidQueue.configuration
+
+          # A nil value means the caller did not ask for a specific behavior.
+          # Jobs enqueued by earlier versions of the gem can also carry nil.
+          raise_error_responses = profile_config.raise_error_responses if raise_error_responses.nil?
+
+          task_handler = TaskHandler.new(active_job_data, config: profile_config)
 
           task = PatientHttp::RequestTask.new(
             request: request,
@@ -58,12 +76,11 @@ module PatientHttp
             return task.id
           end
 
-          # Look up the named processor. An unknown name raises so the job
+          # An unknown processor name raises so the job
           # lands in Active Job's retry mechanism instead of being dropped;
           # this covers rolling deploys where an old process has not
           # configured a new profile yet.
-          processor = PatientHttp::SolidQueue.processor(name)
-          if processor.nil? && !config.processor_profiles.key?(name)
+          if declared_config.nil?
             raise PatientHttp::UnknownProcessorError, "No processor profile configured for #{name.inspect}"
           end
 

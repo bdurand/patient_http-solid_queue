@@ -2,26 +2,27 @@
 
 module PatientHttp
   module SolidQueue
-    # Background thread that maintains heartbeats and performs garbage collection
-    # for in-flight HTTP requests.
+    # Background thread that updates heartbeats for in-flight requests and
+    # re-enqueues orphaned requests.
     class TaskMonitorThread
       include PatientHttp::TimeHelper
 
       # Maximum seconds to sleep between monitor thread checks.
       MAX_MONITOR_SLEEP = 5.0
 
-      # @return [Configuration] the configuration object
+      # @return [Configuration] The gem configuration.
       attr_reader :config
 
-      # @return [TaskMonitor] the inflight request registry
+      # @return [TaskMonitor] The in-flight request registry.
       attr_reader :task_monitor
 
-      # Initialize the monitor thread.
+      # Creates the monitor thread. Call {#start} to run it.
       #
-      # @param config [Configuration] the configuration object
-      # @param task_monitor [TaskMonitor] the inflight request registry
-      # @param tracked_ids_callback [Proc] callback to get the IDs of all requests the
-      #   processors are tracking (queued, pending, and in-flight)
+      # @param config [Configuration] The gem configuration.
+      # @param task_monitor [TaskMonitor] The in-flight request registry.
+      # @param tracked_ids_callback [Proc] A callable that returns the IDs of
+      #   all requests that the processors track, including queued, pending,
+      #   and in-flight requests.
       def initialize(config, task_monitor, tracked_ids_callback)
         @config = config
         @task_monitor = task_monitor
@@ -31,7 +32,7 @@ module PatientHttp
         @stop_signal = Concurrent::Event.new
       end
 
-      # Start the monitor thread.
+      # Starts the thread. Has no effect if the thread is running.
       #
       # @return [void]
       def start
@@ -50,7 +51,8 @@ module PatientHttp
         @thread.name = "async-http-monitor"
       end
 
-      # Stop the monitor thread.
+      # Stops the thread. Waits up to 1 second for the thread to finish, and
+      # then kills it.
       #
       # @return [void]
       def stop
@@ -61,9 +63,9 @@ module PatientHttp
         @thread = nil
       end
 
-      # Check if monitor thread is running.
+      # Returns whether the thread is running.
       #
-      # @return [Boolean]
+      # @return [Boolean] `true` if the thread is running.
       def running?
         @running.true?
       end

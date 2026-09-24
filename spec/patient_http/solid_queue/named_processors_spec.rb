@@ -60,9 +60,23 @@ RSpec.describe "Named processors" do
       expect { config.processor(:bad, no_such_option: 1) }.to raise_error(ArgumentError, /Invalid processor profile options/)
     end
 
+    it "rejects an encryption_key override because processors share encryption" do
+      config = PatientHttp::SolidQueue::Configuration.new
+      expect { config.processor(:pii, encryption_key: "secret") }.to raise_error(
+        ArgumentError, /encryption_key can't be set for a processor profile/
+      )
+      expect(config.processor_options(:pii)).to be_nil
+    end
+
     it "rejects an empty name" do
       config = PatientHttp::SolidQueue::Configuration.new
       expect { config.processor("", max_connections: 1) }.to raise_error(ArgumentError, /processor name cannot be empty/)
+    end
+
+    it "returns nil for the options of an undeclared or empty name" do
+      config = PatientHttp::SolidQueue::Configuration.new
+      expect(config.processor_options(:missing)).to be_nil
+      expect(config.processor_options("")).to be_nil
     end
 
     it "builds a profile configuration that inherits base options" do
@@ -131,11 +145,53 @@ RSpec.describe "Named processors" do
       expect(PatientHttp::SolidQueue.processor).to be_nil
     end
 
+    it "stops the other processors when one of them fails to stop" do
+      PatientHttp::SolidQueue.start
+      llm_processor = PatientHttp::SolidQueue.processor(:llm)
+      other_processors = [:default, :webhooks].map { |name| PatientHttp::SolidQueue.processor(name) }
+      allow(llm_processor).to receive(:stop).and_wrap_original do |original, **options|
+        original.call(**options)
+        raise "boom"
+      end
+
+      expect { PatientHttp::SolidQueue.stop(timeout: 0) }.not_to raise_error
+
+      expect(other_processors).to all(be_stopped)
+      expect(PatientHttp::SolidQueue.processor(:llm)).to be_nil
+      expect(PatientHttp::SolidQueue::ProcessRegistration.count).to eq(0)
+    end
+
     it "records the summed max connections in the process registration" do
       PatientHttp::SolidQueue.start
 
       registration = PatientHttp::SolidQueue::ProcessRegistration.last
       expect(registration.max_connections).to eq(80)
+    end
+  end
+
+  describe ".processor_config_for" do
+    before do
+      PatientHttp::SolidQueue.configure do |config|
+        config.processor(:llm, max_connections: 20)
+      end
+    end
+
+    it "returns the running processor's configuration" do
+      PatientHttp::SolidQueue.start
+
+      expect(PatientHttp::SolidQueue.processor_config_for(:llm)).to be(PatientHttp::SolidQueue.processor(:llm).config)
+    end
+
+    it "returns the declared profile configuration when no processor is running" do
+      config = PatientHttp::SolidQueue.processor_config_for("llm")
+
+      expect(config).to be(PatientHttp::SolidQueue.configuration.processor_config(:llm))
+      expect(config.max_connections).to eq(20)
+    end
+
+    it "returns nil for a name without a declared profile" do
+      expect(PatientHttp::SolidQueue.processor_config_for(:undeclared)).to be_nil
+      expect(PatientHttp::SolidQueue.processor_config_for("")).to be_nil
     end
   end
 
@@ -166,6 +222,53 @@ RSpec.describe "Named processors" do
 
       job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
       expect(job[:args].last).to eq("default")
+    end
+
+    it "raises UnknownProcessorError for an empty processor name" do
+      request = PatientHttp::Request.new(:get, "https://example.com")
+
+      expect {
+        PatientHttp::SolidQueue.execute(request, callback: callback_class, processor: "")
+      }.to raise_error(PatientHttp::UnknownProcessorError)
+    end
+
+    it "uses the processor profile raise_error_responses when none is given" do
+      PatientHttp::SolidQueue.configure { |config| config.processor(:strict, raise_error_responses: true) }
+
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      PatientHttp::SolidQueue.execute(request, callback: callback_class, processor: :strict)
+
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:args][2]).to be(true)
+      expect(PatientHttp::SolidQueue.configuration.processor_options(:strict)).to eq(raise_error_responses: true)
+    end
+
+    it "uses the base raise_error_responses for a profile that does not override it" do
+      PatientHttp::SolidQueue.configuration.raise_error_responses = true
+
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      PatientHttp::SolidQueue.execute(request, callback: callback_class, processor: :llm)
+
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:args][2]).to be(true)
+    end
+
+    it "uses the processor profile payload_store_threshold" do
+      TestPayloadStore.clear!
+      PatientHttp::SolidQueue.configure do |config|
+        config.register_payload_store(:test_store, adapter: :test_store)
+        config.processor(:small, payload_store_threshold: 1)
+      end
+
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      PatientHttp::SolidQueue.execute(request, callback: callback_class)
+      default_data = ActiveJob::Base.queue_adapter.enqueued_jobs.last[:args][0]
+
+      PatientHttp::SolidQueue.execute(request, callback: callback_class, processor: :small)
+      small_data = ActiveJob::Base.queue_adapter.enqueued_jobs.last[:args][0]
+
+      expect(PatientHttp::ExternalStorage.storage_ref?(default_data)).to be(false)
+      expect(PatientHttp::ExternalStorage.storage_ref?(small_data)).to be(true)
     end
 
     it "raises for a processor profile that is not configured" do
@@ -200,6 +303,24 @@ RSpec.describe "Named processors" do
       )
 
       expect(captured).to be_a(PatientHttp::RequestTask)
+    end
+
+    it "builds the task with the named processor configuration" do
+      PatientHttp::SolidQueue.configure do |config|
+        config.processor(:llm, max_redirects: 1)
+      end
+      PatientHttp::SolidQueue.start
+
+      allow(PatientHttp::SolidQueue.processor(:llm)).to receive(:enqueue)
+      expect(PatientHttp::RequestTask).to receive(:new).with(hash_including(default_max_redirects: 1)).and_call_original
+
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      PatientHttp::SolidQueue::RequestExecutor.execute(
+        request,
+        callback: callback_class,
+        active_job_data: job_data,
+        processor_name: "llm"
+      )
     end
 
     it "raises UnknownProcessorError for a job naming an unconfigured processor" do
