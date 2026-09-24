@@ -2,8 +2,9 @@
 
 module PatientHttp
   module SolidQueue
-    # Rails engine that adds the gem's migrations to the host application's
-    # migration paths.
+    # Rails engine that exposes the gem's migrations to the
+    # `patient_http_solid_queue:install:migrations` task. The migrations don't
+    # run with the host application's `db:migrate` until they are copied.
     class Engine < ::Rails::Engine
       engine_name "patient_http_solid_queue"
 

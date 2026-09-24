@@ -60,6 +60,14 @@ RSpec.describe "Named processors" do
       expect { config.processor(:bad, no_such_option: 1) }.to raise_error(ArgumentError, /Invalid processor profile options/)
     end
 
+    it "rejects an encryption_key override because processors share encryption" do
+      config = PatientHttp::SolidQueue::Configuration.new
+      expect { config.processor(:pii, encryption_key: "secret") }.to raise_error(
+        ArgumentError, /encryption_key can't be set for a processor profile/
+      )
+      expect(config.processor_options(:pii)).to be_nil
+    end
+
     it "rejects an empty name" do
       config = PatientHttp::SolidQueue::Configuration.new
       expect { config.processor("", max_connections: 1) }.to raise_error(ArgumentError, /processor name cannot be empty/)
@@ -131,11 +139,52 @@ RSpec.describe "Named processors" do
       expect(PatientHttp::SolidQueue.processor).to be_nil
     end
 
+    it "stops the other processors when one of them fails to stop" do
+      PatientHttp::SolidQueue.start
+      llm_processor = PatientHttp::SolidQueue.processor(:llm)
+      other_processors = [:default, :webhooks].map { |name| PatientHttp::SolidQueue.processor(name) }
+      allow(llm_processor).to receive(:stop).and_wrap_original do |original, **options|
+        original.call(**options)
+        raise "boom"
+      end
+
+      expect { PatientHttp::SolidQueue.stop(timeout: 0) }.not_to raise_error
+
+      expect(other_processors).to all(be_stopped)
+      expect(PatientHttp::SolidQueue.processor(:llm)).to be_nil
+      expect(PatientHttp::SolidQueue::ProcessRegistration.count).to eq(0)
+    end
+
     it "records the summed max connections in the process registration" do
       PatientHttp::SolidQueue.start
 
       registration = PatientHttp::SolidQueue::ProcessRegistration.last
       expect(registration.max_connections).to eq(80)
+    end
+  end
+
+  describe ".processor_config_for" do
+    before do
+      PatientHttp::SolidQueue.configure do |config|
+        config.processor(:llm, max_connections: 20)
+      end
+    end
+
+    it "returns the running processor's configuration" do
+      PatientHttp::SolidQueue.start
+
+      expect(PatientHttp::SolidQueue.processor_config_for(:llm)).to be(PatientHttp::SolidQueue.processor(:llm).config)
+    end
+
+    it "returns the declared profile configuration when no processor is running" do
+      config = PatientHttp::SolidQueue.processor_config_for("llm")
+
+      expect(config).to be(PatientHttp::SolidQueue.configuration.processor_config(:llm))
+      expect(config.max_connections).to eq(20)
+    end
+
+    it "returns the base configuration for a name without a declared profile" do
+      expect(PatientHttp::SolidQueue.processor_config_for(:undeclared)).to be(PatientHttp::SolidQueue.configuration)
     end
   end
 

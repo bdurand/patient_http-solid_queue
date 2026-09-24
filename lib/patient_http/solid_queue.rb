@@ -96,7 +96,6 @@ module PatientHttp
       def configure
         config = configuration
         yield(config) if block_given?
-        @external_storage = nil
         config
       end
 
@@ -190,12 +189,19 @@ module PatientHttp
         @processors.values.all?(&:stopped?)
       end
 
-      # Returns the external storage for request and result payloads.
+      # Returns the external storage for request and result payloads. The
+      # storage is rebuilt when the configuration is replaced.
       #
       # @return [PatientHttp::ExternalStorage] The external storage.
       # @api private
       def external_storage
-        @external_storage ||= PatientHttp::ExternalStorage.new(configuration)
+        config = configuration
+        storage = @external_storage
+        unless storage&.config.equal?(config)
+          storage = PatientHttp::ExternalStorage.new(config)
+          @external_storage = storage
+        end
+        storage
       end
 
       # Runs an HTTP request asynchronously and calls the callback service with
@@ -239,7 +245,7 @@ module PatientHttp
           raise PatientHttp::UnknownProcessorError.new("No processor profile configured for #{processor_name.inspect}")
         end
 
-        profile_config = configuration.processor_config(processor_name)
+        profile_config = processor_config_for(processor_name)
 
         # The PatientHttp module methods pass nil when the caller did not ask for a
         # specific behavior, so fall back to the processor profile's setting.
@@ -435,13 +441,31 @@ module PatientHttp
         end
       end
 
+      # Returns the configuration for a processor profile. Uses the running
+      # processor's configuration if there is one. A name without a declared
+      # profile uses the base configuration.
+      #
+      # @param name [Symbol, String] The processor name.
+      # @return [PatientHttp::Configuration] The configuration for the profile.
+      # @api private
+      def processor_config_for(name)
+        key = name.to_sym
+        running = @processors[key]
+        return running.config if running
+
+        config = configuration
+        config.processor_options(key) ? config.processor_config(key) : config
+      end
+
       private
 
       # Stops every processor.
       #
       # Each processor waits up to the full timeout for its in-flight requests,
       # so the processors stop in parallel. Stopping them one at a time would
-      # multiply the shutdown time by the number of processors.
+      # multiply the shutdown time by the number of processors. An error from
+      # one processor is logged so that the other processors and the shared
+      # services still shut down.
       #
       # @param timeout [Float, nil] The maximum number of seconds to wait for
       #   in-flight requests.
@@ -451,10 +475,24 @@ module PatientHttp
         return if processors.empty?
 
         if processors.one?
-          processors.first.stop(timeout: timeout)
+          stop_processor(processors.first, timeout)
         else
-          processors.map { |processor| Thread.new { processor.stop(timeout: timeout) } }.each(&:join)
+          processors.map { |processor| Thread.new { stop_processor(processor, timeout) } }.each(&:join)
         end
+      end
+
+      # Stops a processor and logs any error instead of raising it.
+      #
+      # @param processor [PatientHttp::Processor] The processor.
+      # @param timeout [Float, nil] The maximum number of seconds to wait for
+      #   in-flight requests.
+      # @return [void]
+      def stop_processor(processor, timeout)
+        processor.stop(timeout: timeout)
+      rescue => e
+        configuration.logger&.error(
+          "[PatientHttp::SolidQueue] Failed to stop processor #{processor.name}: #{e.inspect}"
+        )
       end
 
       # Stops the monitor thread and removes this process from the registry. The

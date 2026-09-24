@@ -74,11 +74,12 @@ module PatientHttp
         if ::SolidQueue.shutdown_timeout
           pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
         end
-        pool_options[:logger] ||= (defined?(SolidQueue.logger) ? SolidQueue.logger : nil)
+        pool_options[:logger] ||= (defined?(::SolidQueue.logger) ? ::SolidQueue.logger : nil)
 
         super(**pool_options)
 
         @processor_profiles = {default: {}}
+        @profile_configs = {}
         self.queue_name = queue_name
         self.heartbeat_interval = heartbeat_interval
         self.orphan_threshold = orphan_threshold
@@ -102,11 +103,13 @@ module PatientHttp
       #
       # @param name [Symbol, String] The processor name.
       # @param options [Hash] Overrides for `PatientHttp::Configuration`
-      #   options.
+      #   options. `encryption_key` can't be overridden, because all processors
+      #   share encryption.
       # @return [Hash] The stored options for the profile.
       # @raise [ArgumentError] If the name is empty or an option is invalid.
       def processor(name, **options)
         key = normalize_processor_name(name)
+        @profile_configs.delete(key)
         @processor_profiles[key] = normalize_profile_options!(options)
       end
 
@@ -132,7 +135,8 @@ module PatientHttp
       # A profile without overrides uses this configuration. Other profiles use
       # a view of this configuration with their overrides applied, so all
       # processors share secrets, preprocessors, payload stores, and
-      # encryption.
+      # encryption. The view is built once and reused until the profile is
+      # declared again.
       #
       # @param name [Symbol, String] The processor name.
       # @return [PatientHttp::Configuration] The configuration for the processor.
@@ -144,7 +148,7 @@ module PatientHttp
 
         return self if profile.empty?
 
-        ProfileConfiguration.new(self, profile)
+        @profile_configs[key] ||= ProfileConfiguration.new(self, profile)
       end
 
       # Sets the number of seconds between heartbeat updates for in-flight
@@ -247,12 +251,17 @@ module PatientHttp
         PatientHttp::SolidQueue::CallbackJob.queue_as(name)
       end
 
-      # Profile options must be valid PatientHttp::Configuration options. A
+      # Profile options must be valid PatientHttp::Configuration options other
+      # than `encryption_key`, which all processors share. A
       # throwaway configuration exercises each option's own validation and
       # normalization, so the stored value is what the writer would have
       # produced rather than the raw input.
       def normalize_profile_options!(options)
         return options if options.empty?
+
+        if options.key?(:encryption_key)
+          raise ArgumentError.new("encryption_key can't be set for a processor profile")
+        end
 
         probe = PatientHttp::Configuration.new(**options)
         options.to_h do |key, value|

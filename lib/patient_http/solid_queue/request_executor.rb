@@ -15,8 +15,9 @@ module PatientHttp
         # @param synchronous [Boolean] If `true`, runs the request inline. Use
         #   this in tests.
         # @param callback_args [#to_h, nil] Arguments to pass to the callback.
-        # @param raise_error_responses [Boolean] If `true`, treats non-2xx
-        #   responses as errors.
+        # @param raise_error_responses [Boolean, nil] If `true`, treats non-2xx
+        #   responses as errors. If `nil`, uses the processor profile's
+        #   `raise_error_responses` option.
         # @param request_id [String, nil] A unique request ID for tracking.
         # @param processor_name [Symbol, String, nil] The name of the processor
         #   profile that runs the request. Defaults to the request's processor
@@ -48,7 +49,11 @@ module PatientHttp
           name = (processor_name || request.processor || :default).to_sym
           processor = PatientHttp::SolidQueue.processor(name)
           profile_declared = config.processor_profiles.key?(name)
-          profile_config = processor&.config || (profile_declared ? config.processor_config(name) : config)
+          profile_config = PatientHttp::SolidQueue.processor_config_for(name)
+
+          # Jobs enqueued by earlier versions of the gem can carry nil, which
+          # means the caller did not ask for a specific behavior.
+          raise_error_responses = profile_config.raise_error_responses if raise_error_responses.nil?
 
           task_handler = TaskHandler.new(active_job_data, config: profile_config)
 

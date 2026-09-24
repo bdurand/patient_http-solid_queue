@@ -111,12 +111,12 @@ RSpec.describe PatientHttp::SolidQueue do
   end
 
   describe ".external_storage" do
-    it "is reset by configure so it picks up the new configuration" do
-      original_storage = described_class.external_storage
+    it "uses the current configuration after the configuration is replaced" do
+      described_class.external_storage
 
-      described_class.configure { |c| }
+      PatientHttp.default_configuration = nil
 
-      expect(described_class.external_storage).not_to be(original_storage)
+      expect(described_class.external_storage.config).to be(described_class.configuration)
     end
 
     it "is reset by reset_configuration!" do
@@ -195,6 +195,23 @@ RSpec.describe PatientHttp::SolidQueue do
       end
       stub_const("TestCallback", klass)
       klass
+    end
+
+    it "logs a processor stop error and still shuts down the shared services" do
+      log = StringIO.new
+      described_class.configure { |c| c.logger = Logger.new(log) }
+      described_class.start
+      allow(described_class.processor).to receive(:stop).and_wrap_original do |original, **options|
+        original.call(**options)
+        raise "boom"
+      end
+
+      expect { described_class.stop(timeout: 0) }.not_to raise_error
+
+      expect(log.string).to match(/Failed to stop processor default: .*boom/)
+      expect(described_class.processor).to be_nil
+      expect(described_class.instance_variable_get(:@monitor_thread)).to be_nil
+      expect(PatientHttp::SolidQueue::ProcessRegistration.count).to eq(0)
     end
 
     it "keeps the request handler registered so requests made while stopping are enqueued" do

@@ -269,6 +269,8 @@ request = PatientHttp::Request.new(:get, url, processor: :llm)
 template = PatientHttp::RequestTemplate.new(base_url: url, processor: :llm)
 ```
 
+A request that names a processor that isn't declared in the process making the request raises `PatientHttp::UnknownProcessorError`, so a misspelled name fails where the request is made. Declare processors in an initializer that every process loads, such as the web server and the Solid Queue workers, not only in code that runs in worker processes.
+
 The processor name is saved in the job arguments, so Active Job retries and crash recovery send the request to the same processor. If a job names a processor that isn't configured in the process that runs it, the job raises `PatientHttp::UnknownProcessorError`, and Active Job retries it with backoff. As a result, you can roll out a new profile name gradually. Jobs enqueued by earlier versions of the gem run on the `:default` processor.
 
 ### Use request templates
