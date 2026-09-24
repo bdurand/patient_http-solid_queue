@@ -6,14 +6,15 @@ require "rails/generators/active_record"
 
 module PatientHttp
   module SolidQueue
-    # Installs the crash-recovery migration and a commented initializer.
+    # Installs the crash recovery migration and a commented initializer.
     #
-    #   rails generate patient_http:solid_queue:install
+    # The migration must run on the database that Solid Queue uses. The
+    # generator finds that database in `config/database.yml` and copies the
+    # migration to its migrations path, so a multi-database application needs
+    # no extra arguments. To name the database explicitly, pass `--database`.
     #
-    # The migration has to run on the database Solid Queue uses. The generator
-    # finds that database in config/database.yml and copies the migration into
-    # its migrations path, so the multi-database case needs no extra arguments.
-    # Pass --database to name it explicitly.
+    # @example
+    #   bin/rails generate patient_http:solid_queue:install
     class InstallGenerator < ::Rails::Generators::Base
       include ::Rails::Generators::Migration
 
@@ -32,13 +33,18 @@ module PatientHttp
         desc: "Skip creating config/initializers/patient_http.rb"
 
       class << self
-        # @param dirname [String] the directory the migration is copied into
-        # @return [String] the timestamp prefix for the new migration
+        # Returns the timestamp prefix for the new migration.
+        #
+        # @param dirname [String] The directory that the migration is copied to.
+        # @return [String] The timestamp prefix.
         def next_migration_number(dirname)
           ::ActiveRecord::Generators::Base.next_migration_number(dirname)
         end
       end
 
+      # Copies the migration to the Solid Queue database's migrations path.
+      #
+      # @return [void]
       def copy_migration
         migration_template(
           "create_patient_http_solid_queue_tables.rb.erb",
@@ -47,12 +53,19 @@ module PatientHttp
         )
       end
 
+      # Creates `config/initializers/patient_http.rb`, unless
+      # `--skip-initializer` is set.
+      #
+      # @return [void]
       def create_initializer
         return if options[:skip_initializer]
 
         template("initializer.rb", "config/initializers/patient_http.rb")
       end
 
+      # Prints the migrate command and a usage example.
+      #
+      # @return [void]
       def show_next_steps
         say("")
         say("patient_http-solid_queue is installed.", :green)
@@ -72,10 +85,10 @@ module PatientHttp
 
       private
 
-      # The migrations path of the database Solid Queue uses. Falls back to the
-      # application's primary migrations path for single-database applications.
+      # Returns the migrations path of the database that Solid Queue uses. For
+      # single-database applications, falls back to `db/migrate`.
       #
-      # @return [String]
+      # @return [String] The migrations path.
       def migration_directory
         @migration_directory ||= begin
           path = Array(database_config&.migrations_paths).first
@@ -83,13 +96,18 @@ module PatientHttp
         end
       end
 
-      # The database configuration Solid Queue runs against.
+      # Returns the configuration of the database that Solid Queue uses.
       #
-      # Preference order: an explicit --database, a database named "queue"
-      # (the Rails default for Solid Queue), any database whose name mentions
-      # the queue, then the primary database.
+      # The generator checks the following, in order:
       #
-      # @return [ActiveRecord::DatabaseConfigurations::DatabaseConfig, nil]
+      # 1. The database named by `--database`.
+      # 2. A database named `queue`, which is the Rails default for Solid Queue.
+      # 3. Any database whose name contains `queue`.
+      # 4. The primary database.
+      #
+      # @return [ActiveRecord::DatabaseConfigurations::DatabaseConfig, nil] The
+      #   database configuration, or `nil` if `config/database.yml` can't be
+      #   read.
       def database_config
         return @database_config if defined?(@database_config)
 
@@ -120,9 +138,9 @@ module PatientHttp
         end
       end
 
-      # The rake task that runs the migration for the detected database.
+      # Returns the Rake task that runs the migration on the detected database.
       #
-      # @return [String]
+      # @return [String] The task name.
       def migrate_task
         name = database_config&.name
         return "db:migrate" if name.nil? || name == "primary"
@@ -130,7 +148,8 @@ module PatientHttp
         "db:migrate:#{name}"
       end
 
-      # @return [String] the Rails version stamp for the generated migration class
+      # @return [String] The Rails version stamp for the generated migration
+      #   class.
       def migration_version
         "[#{::ActiveRecord::VERSION::MAJOR}.#{::ActiveRecord::VERSION::MINOR}]"
       end

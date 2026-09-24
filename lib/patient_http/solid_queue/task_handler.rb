@@ -2,50 +2,76 @@
 
 module PatientHttp
   module SolidQueue
-    # Active Job implementation of TaskHandler.
+    # Active Job implementation of `PatientHttp::TaskHandler`.
     #
-    # Handles task lifecycle operations using Active Job for job management:
-    # - Completion and error callbacks are triggered via CallbackJob
-    # - Large payloads are stored via ExternalStorage before enqueuing
-    # - Job retry uses ActiveJob::Base.deserialize
+    # The handler manages the task lifecycle with Active Job:
+    #
+    # - `CallbackJob` runs the completion and error callbacks.
+    # - `ExternalStorage` stores large payloads before the job is enqueued.
+    # - Retries deserialize and re-enqueue the original Active Job.
     class TaskHandler < PatientHttp::TaskHandler
+      # @return [Hash] The serialized Active Job that made the request.
       attr_reader :active_job_data
 
+      # Creates a task handler.
+      #
+      # @param active_job_data [Hash] The serialized Active Job that made the
+      #   request.
       def initialize(active_job_data)
         @active_job_data = active_job_data
       end
 
+      # Enqueues a `CallbackJob` that passes the response to the callback.
+      #
+      # @param response [PatientHttp::Response] The HTTP response.
+      # @param callback [String] The callback service class name.
+      # @return [void]
       def on_complete(response, callback)
         data = store_if_needed(response.as_json)
         CallbackJob.perform_later(data, "response", callback)
         delete_stored_request_payload
       end
 
+      # Enqueues a `CallbackJob` that passes the error to the callback.
+      #
+      # @param error [PatientHttp::Error] Information about the error.
+      # @param callback [String] The callback service class name.
+      # @return [void]
       def on_error(error, callback)
         data = store_if_needed(error.as_json)
         CallbackJob.perform_later(data, "error", callback)
         delete_stored_request_payload
       end
 
+      # Re-enqueues the original Active Job with its execution count reset.
+      #
+      # @return [ActiveJob::Base, false] The enqueued job, or `false` if it
+      #   wasn't enqueued.
       def retry
         ActiveJob::Base.deserialize(@active_job_data).tap { |j| j.executions = 0 }.enqueue
       end
 
+      # Returns the Active Job ID.
+      #
+      # @return [String] The job ID.
       def job_id
         @active_job_data["job_id"]
       end
 
+      # Returns the Active Job class.
+      #
+      # @return [Class] The job class.
       def worker_class
         PatientHttp::ClassHelper.resolve_class_name(@active_job_data["job_class"])
       end
 
       private
 
-      # Delete the externally stored request payload once the request has
-      # completed. Until then the payload must remain fetchable because the
-      # Active Job data referencing it can be re-enqueued by Active Job retries,
-      # processor shutdown retries, and crash recovery. Only applies to
-      # RequestJob jobs; other job types own their own arguments.
+      # Deletes the externally stored request payload after the request
+      # completes. Until then, the payload must stay available, because Active
+      # Job retries, processor shutdown retries, and crash recovery can
+      # re-enqueue the job that references it. Applies only to `RequestJob`.
+      # Other job types manage their own arguments.
       def delete_stored_request_payload
         return unless @active_job_data["job_class"] == RequestJob.name
 

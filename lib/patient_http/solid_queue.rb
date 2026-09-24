@@ -3,40 +3,38 @@
 require "patient_http"
 require "solid_queue"
 
-# Main module for the Solid Queue Async HTTP gem.
-#
-# This gem provides a mechanism to offload long-running HTTP requests from Solid Queue workers
-# to a dedicated async I/O processor running in the same process, freeing worker threads
-# immediately while HTTP requests are in flight.
-#
-# == Usage
-#
-#   request = PatientHttp::Request.new(:get, "https://api.example.com/users/123")
-#   PatientHttp::SolidQueue.execute(
-#     request,
-#     callback: MyCallback,
-#     callback_args: {user_id: 123}
-#   )
-#
-# Define a callback service class with +on_complete+ and +on_error+ methods:
-#
-#   class MyCallback
-#     def on_complete(response)
-#       user_id = response.callback_args[:user_id]
-#       User.find(user_id).update!(data: response.json)
-#     end
-#
-#     def on_error(error)
-#       Rails.logger.error("Request failed: #{error.message}")
-#     end
-#   end
 module PatientHttp
+  # Runs HTTP requests from Solid Queue jobs on an async I/O processor.
+  #
+  # The processor runs in the Solid Queue worker process. Worker threads hand
+  # off long-running HTTP requests to it and are free to run other jobs while
+  # the requests are in flight.
+  #
+  # @example Make a request
+  #   PatientHttp.get(
+  #     "https://api.example.com/users/123",
+  #     callback: MyCallback,
+  #     callback_args: {user_id: 123}
+  #   )
+  #
+  # @example Define a callback service
+  #   class MyCallback
+  #     def on_complete(response)
+  #       user_id = response.callback_args[:user_id]
+  #       User.find(user_id).update!(data: response.json)
+  #     end
+  #
+  #     def on_error(error)
+  #       Rails.logger.error("Request failed: #{error.message}")
+  #     end
+  #   end
   module SolidQueue
+    # The gem version.
     VERSION = File.read(File.join(__dir__, "../../VERSION")).strip
 
-    # Raised when the crash-recovery registry entry for a request cannot be
-    # written. The request is rejected rather than accepted without a durable
-    # record, and the job retries.
+    # Raised when the crash recovery registry entry for a request can't be
+    # written. The processor rejects the request instead of accepting it
+    # without a durable record, and the job retries.
     class RegistrationError < StandardError; end
 
     autoload :CallbackJob, File.join(__dir__, "solid_queue/callback_job")
@@ -64,29 +62,31 @@ module PatientHttp
     @monitor_thread = nil
 
     class << self
-      # Replace the configuration (useful for testing). The configuration is
-      # stored by PatientHttp, so this assigns it there.
+      # Replaces the configuration. Use this in tests.
       #
-      # @param config [Configuration, nil] the configuration to use
+      # `PatientHttp` stores the configuration, so this method assigns it there.
+      #
+      # @param config [Configuration, nil] The configuration to use.
       # @return [void]
       def configuration=(config)
         PatientHttp.default_configuration = config
       end
 
-      # Configure the gem with a block.
+      # Configures the gem with a block.
       #
-      # The same configuration object is yielded every time, so options
-      # accumulate and several initializers can each contribute without
-      # overwriting one another. `PatientHttp.configure` delegates here, so
-      # application code can use either entry point.
+      # Each call yields the same configuration object, so options accumulate.
+      # Several initializers can each set options without overwriting one
+      # another. `PatientHttp.configure` delegates to this method, so
+      # application code can use either one.
       #
       # @example
       #   PatientHttp.configure do |config|
       #     config.max_connections = 512
       #   end
       #
-      # @yield [Configuration] the configuration object
-      # @return [Configuration]
+      # @yield [config] Sets options on the configuration.
+      # @yieldparam config [Configuration] The configuration object.
+      # @return [Configuration] The configuration object.
       def configure
         config = configuration
         yield(config) if block_given?
@@ -94,107 +94,116 @@ module PatientHttp
         config
       end
 
-      # The configuration for this process, created on first use.
+      # Returns the configuration for this process and creates it on first use.
       #
-      # The configuration object is stored by `PatientHttp`, so this and
-      # `PatientHttp.configuration` are the same object. That is what lets
-      # secrets registered at the module level with `PatientHttp.register_secret`
-      # reach the configuration the processor runs with, regardless of boot order.
+      # `PatientHttp` stores the configuration object, so this method and
+      # `PatientHttp.configuration` return the same object. Secrets that
+      # `PatientHttp.register_secret` registers at the module level therefore
+      # reach the processor's configuration, regardless of boot order.
       #
-      # @return [Configuration]
+      # @return [Configuration] The configuration object.
       def configuration
         PatientHttp.configuration
       end
 
-      # Build a new configuration instance. Called by `PatientHttp` when it needs
-      # to create the configuration for this process.
+      # Builds a new configuration instance. `PatientHttp` calls this method
+      # when it creates the configuration for this process.
       #
-      # @return [Configuration]
+      # @return [Configuration] A new configuration object.
       # @api private
       def new_configuration
         Configuration.new
       end
 
-      # Reset configuration to defaults (useful for testing).
+      # Resets the configuration to its defaults. Use this in tests.
       #
-      # @return [Configuration]
+      # @return [Configuration] The new configuration object.
       def reset_configuration!
         @external_storage = nil
         PatientHttp.default_configuration = nil
         configuration
       end
 
-      # Add a callback to be executed after a successful request completion.
+      # Adds a callback that runs after a request completes. Callbacks run in
+      # the order that they're added.
       #
-      # @yield [response] block to execute after an HTTP request completes
-      # @yieldparam response [PatientHttp::Response] the HTTP response
+      # @yield [response] Runs after an HTTP request completes.
+      # @yieldparam response [PatientHttp::Response] The HTTP response.
+      # @return [void]
       def after_completion(&block)
         @after_completion_callbacks << block
       end
 
-      # Add a callback to be executed after a request error.
+      # Adds a callback that runs after a request fails. Callbacks run in the
+      # order that they're added.
       #
-      # @yield [error] block to execute after an HTTP request errors
-      # @yieldparam error [PatientHttp::Error] information about the error
+      # @yield [error] Runs after an HTTP request fails.
+      # @yieldparam error [PatientHttp::Error] Information about the error.
+      # @return [void]
       def after_error(&block)
         @after_error_callbacks << block
       end
 
-      # Check if any processor is running.
+      # Returns whether any processor is running.
       #
-      # @return [Boolean]
+      # @return [Boolean] `true` if any processor is running.
       def running?
         @processors.values.any?(&:running?)
       end
 
-      # Check if any processor is draining (not accepting new requests).
+      # Returns whether any processor is draining. A draining processor
+      # doesn't accept new requests.
       #
-      # @return [Boolean]
+      # @return [Boolean] `true` if any processor is draining.
       def draining?
         @processors.values.any?(&:draining?)
       end
 
-      # Check if any processor is stopping.
+      # Returns whether any processor is stopping.
       #
-      # @return [Boolean]
+      # @return [Boolean] `true` if any processor is stopping.
       def stopping?
         @processors.values.any?(&:stopping?)
       end
 
-      # Check if all processors are stopped or none have been started.
+      # Returns whether all processors are stopped.
       #
-      # @return [Boolean]
+      # @return [Boolean] `true` if all processors are stopped or none have
+      #   started.
       def stopped?
         @processors.values.all?(&:stopped?)
       end
 
-      # Get an ExternalStorage instance for storing and fetching payloads.
+      # Returns the external storage that stores and fetches payloads.
       #
-      # @return [PatientHttp::ExternalStorage]
+      # @return [PatientHttp::ExternalStorage] The external storage.
       # @api private
       def external_storage
         @external_storage ||= PatientHttp::ExternalStorage.new(configuration)
       end
 
-      # Execute an async HTTP request.
+      # Enqueues an async HTTP request.
       #
-      # Application code should normally use the `PatientHttp` module methods
-      # (`PatientHttp.get`, `PatientHttp.post`, `PatientHttp.request`, or the
-      # `PatientHttp::RequestHelper` mixin) instead of calling this directly.
-      # Those methods take the same options, including `processor:`, and keep
-      # application code free of any reference to the job system. This method is
-      # the integration's own entry point and remains available for dispatching
-      # a request object that has already been built.
+      # In application code, use the `PatientHttp` module methods instead,
+      # such as `PatientHttp.get`, `PatientHttp.post`, `PatientHttp.request`,
+      # or the `PatientHttp::RequestHelper` mixin. Those methods take the same
+      # options, including `processor:`, and keep application code free of
+      # references to the job system. Use this method to dispatch a request
+      # object that's already built.
       #
-      # @param request [PatientHttp::Request] the HTTP request to execute
-      # @param callback [Class, String] Callback service class with +on_complete+ and +on_error+
-      #   instance methods, or its fully qualified class name.
-      # @param callback_args [#to_h, nil] Arguments to pass to callback
-      # @param raise_error_responses [Boolean] If true, treats non-2xx responses as errors
-      # @param processor [Symbol, String, nil] Name of the processor profile that should
-      #   execute the request. Defaults to the request's own processor name or :default.
-      # @return [String] the request ID
-      # @raise [PatientHttp::UnknownProcessorError] if the processor profile is not configured
+      # @param request [PatientHttp::Request] The HTTP request to execute.
+      # @param callback [Class, String] The callback service class, or its fully
+      #   qualified class name. The class must define `on_complete` and
+      #   `on_error` instance methods.
+      # @param callback_args [#to_h, nil] Arguments to pass to the callback.
+      # @param raise_error_responses [Boolean] If `true`, treats non-2xx
+      #   responses as errors.
+      # @param processor [Symbol, String, nil] The name of the processor profile
+      #   that runs the request. Defaults to the request's processor name, or
+      #   `:default`.
+      # @return [String] The request ID.
+      # @raise [PatientHttp::UnknownProcessorError] If the processor profile
+      #   isn't configured.
       def execute(request, callback:, callback_args: nil, raise_error_responses: false, processor: nil)
         PatientHttp::CallbackValidator.validate!(callback)
         callback_name = callback.is_a?(Class) ? callback.name : callback.to_s
@@ -222,8 +231,8 @@ module PatientHttp
         request_id
       end
 
-      # Start a processor for each configured processor profile, along with
-      # the shared crash-recovery monitor.
+      # Starts a processor for each configured processor profile, and the
+      # shared crash recovery monitor.
       #
       # @return [void]
       def start
@@ -258,7 +267,8 @@ module PatientHttp
         register_handler
       end
 
-      # Signal all processors to drain (stop accepting new requests).
+      # Signals all processors to drain. A draining processor stops accepting
+      # new requests.
       #
       # @return [void]
       def quiet
@@ -269,9 +279,10 @@ module PatientHttp
         end
       end
 
-      # Stop all processors gracefully.
+      # Stops all processors gracefully.
       #
-      # @param timeout [Float, nil] maximum time to wait for in-flight requests to complete
+      # @param timeout [Float, nil] The maximum number of seconds to wait for
+      #   in-flight requests to complete.
       # @return [void]
       def stop(timeout: nil)
         # The request handler stays registered. A request made while the process
@@ -286,7 +297,7 @@ module PatientHttp
         end
       end
 
-      # Reset all state (useful for testing).
+      # Resets all state. Use this in tests.
       #
       # @return [void]
       # @api private
@@ -305,13 +316,13 @@ module PatientHttp
         register_handler
       end
 
-      # Register SolidQueue as the request handler for processing HTTP requests.
+      # Registers Solid Queue as the handler for HTTP requests.
       #
-      # This is called automatically when the gem is loaded, so requests made
-      # through the `PatientHttp` module work in every process that requires it,
-      # whether or not the application configures the gem or runs a worker. It
-      # stays registered for the life of the process: after the processor stops,
-      # requests are enqueued for another process to run.
+      # The gem calls this method when it loads, so requests made through the
+      # `PatientHttp` module work in every process that requires the gem. This
+      # is true whether or not the application configures the gem or runs a
+      # worker. The handler stays registered for the life of the process. After
+      # the processor stops, requests are enqueued for another process to run.
       #
       # @return [void]
       def register_handler
@@ -327,9 +338,9 @@ module PatientHttp
         PatientHttp.register_handler(@request_handler)
       end
 
-      # Invoke the registered completion callbacks.
+      # Calls the registered completion callbacks.
       #
-      # @param response [PatientHttp::Response] the HTTP response
+      # @param response [PatientHttp::Response] The HTTP response.
       # @return [void]
       # @api private
       def invoke_completion_callbacks(response)
@@ -340,9 +351,9 @@ module PatientHttp
         end
       end
 
-      # Invoke the registered error callbacks.
+      # Calls the registered error callbacks.
       #
-      # @param error [PatientHttp::Error] information about the error
+      # @param error [PatientHttp::Error] Information about the error.
       # @return [void]
       # @api private
       def invoke_error_callbacks(error)
@@ -353,34 +364,36 @@ module PatientHttp
         end
       end
 
-      # Encrypt a value using the configured encryptor.
+      # Encrypts a value with the configured encryptor.
       #
-      # @param value [Object] the value to encrypt
-      # @return [String] the encrypted value
+      # @param value [Object] The value to encrypt.
+      # @return [String] The encrypted value.
       def encrypt(value)
         configuration.encryptor.encrypt(value)
       end
 
-      # Decrypt a value using the configured encryptor.
+      # Decrypts a value with the configured encryptor.
       #
-      # @param value [String] the encrypted value to decrypt
-      # @return [Object] the decrypted value
+      # @param value [String] The encrypted value to decrypt.
+      # @return [Object] The decrypted value.
       def decrypt(value)
         configuration.encryptor.decrypt(value)
       end
 
-      # Returns a processor instance by name (internal accessor).
+      # Returns a processor by name.
       #
-      # @param name [Symbol, String] the processor name
-      # @return [PatientHttp::Processor, nil]
+      # @param name [Symbol, String] The processor name.
+      # @return [PatientHttp::Processor, nil] The processor, or `nil` if no
+      #   processor with that name is running.
       # @api private
       def processor(name = :default)
         @processors[name.to_sym]
       end
 
-      # Set the default processor (internal, for testing).
+      # Sets the default processor. Use this in tests.
       #
-      # @param value [PatientHttp::Processor, nil]
+      # @param value [PatientHttp::Processor, nil] The processor, or `nil` to
+      #   remove the default processor.
       # @api private
       def processor=(value)
         if value.nil?
@@ -392,8 +405,8 @@ module PatientHttp
 
       private
 
-      # Stop every processor, draining them at the same time so the timeout
-      # bounds the whole shutdown instead of each processor in turn.
+      # Stops every processor. The processors drain at the same time, so the
+      # timeout bounds the whole shutdown instead of each processor in turn.
       def stop_processors(timeout:)
         processors = @processors.values
         return if processors.empty?
@@ -405,9 +418,9 @@ module PatientHttp
         end
       end
 
-      # Stop the shared monitor thread and remove this process from the
-      # registry. Called with the lifecycle mutex held after all processors
-      # have stopped.
+      # Stops the shared monitor thread and removes this process from the
+      # registry. Callers must hold the lifecycle mutex, and all processors
+      # must be stopped.
       def shutdown_shared_services
         @monitor_thread&.stop
         @monitor_thread = nil

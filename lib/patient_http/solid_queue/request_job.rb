@@ -2,11 +2,11 @@
 
 module PatientHttp
   module SolidQueue
-    # Active Job that executes HTTP requests asynchronously.
+    # Active Job that hands HTTP requests to the async processor.
     #
-    # Enqueued when calling PatientHttp::SolidQueue.get, .post, etc.
-    # On completion, the specified callback service's on_complete or on_error is
-    # invoked via CallbackJob.
+    # `PatientHttp.get`, `PatientHttp.post`, and the other request methods
+    # enqueue this job. When the request completes, `CallbackJob` calls the
+    # callback service's `on_complete` or `on_error` method.
     #
     # @api private
     class RequestJob < ActiveJob::Base
@@ -38,13 +38,20 @@ module PatientHttp
         )
       end
 
-      # @param data [Hash] Request data (possibly a storage reference)
-      # @param callback_service_name [String] Fully qualified callback service class name
-      # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx responses as errors
-      # @param callback_args [Hash, nil] Arguments to pass to the callback
-      # @param request_id [String, nil] Unique request ID for tracking
-      # @param processor_name [String, nil] Name of the processor profile to run the request
-      #   on; nil (jobs enqueued by older versions) runs on the default processor
+      # Loads the request and hands it to the async processor.
+      #
+      # @param data [Hash] The request data, or a reference to it in external
+      #   storage.
+      # @param callback_service_name [String] The fully qualified class name of
+      #   the callback service.
+      # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx
+      #   responses as errors.
+      # @param callback_args [Hash, nil] Arguments to pass to the callback.
+      # @param request_id [String, nil] A unique request ID for tracking.
+      # @param processor_name [String, nil] The name of the processor profile
+      #   that runs the request. Jobs enqueued by older versions pass `nil`,
+      #   which runs the request on the default processor.
+      # @return [void]
       def perform(data, callback_service_name, raise_error_responses, callback_args, request_id, processor_name = nil)
         actual_data = PatientHttp::ExternalStorage.storage_ref?(data) ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
         actual_data = PatientHttp::SolidQueue.decrypt(actual_data)
