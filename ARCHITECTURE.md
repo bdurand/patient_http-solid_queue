@@ -7,7 +7,7 @@ PatientHttp::SolidQueue provides a Solid Queue integration layer for the [patien
 ## Key Design Principles
 
 1. **Non-blocking workers**: Jobs enqueue HTTP requests and quickly return so worker capacity remains available
-2. **Singleton processor per process**: One async I/O processor per worker process handles request concurrency
+2. **Processor per profile**: Each worker process runs one async I/O processor for each configured processor profile. Most applications use only the default processor.
 3. **Callback service pattern**: HTTP results are delivered to callback services via `on_complete` and `on_error`
 4. **Lifecycle integration**: Processor lifecycle is tied to Solid Queue worker start/stop hooks
 5. **Active Job-native task handling**: Request execution, callback jobs, and retries use Active Job semantics
@@ -55,18 +55,19 @@ Background thread that periodically:
 - runs orphan cleanup under a distributed DB lock
 
 ### Configuration
-`PatientHttp::SolidQueue::Configuration` wraps patient_http configuration and adds Solid Queue-specific options such as:
+`PatientHttp::SolidQueue::Configuration` extends patient_http's configuration with Solid Queue-specific options, including:
 - `queue_name`
 - `heartbeat_interval`
 - `orphan_threshold`
-- `payload_store_threshold`
+- `on_retries_exhausted`
+- Named processor profiles
 
 ## Request Lifecycle
 
-1. Application code calls `PatientHttp.get/post/put/patch/delete` (which delegates to the registered Solid Queue handler) or `PatientHttp::SolidQueue.execute` directly.
+1. Application code calls `PatientHttp.get`, `PatientHttp.post`, or another module method (which delegates to the registered Solid Queue handler), or `PatientHttp::SolidQueue.execute` directly.
 2. `RequestJob` is enqueued with serialized request data and callback metadata.
 3. `RequestJob` decrypts/deserializes and calls `RequestExecutor.execute`.
-4. `RequestExecutor` creates an async task and enqueues it on the processor.
+4. `RequestExecutor` creates a `RequestTask` and enqueues it on the processor. The `ProcessorObserver` writes the crash-recovery record before the task is queued.
 5. Processor executes HTTP request asynchronously.
 6. `TaskHandler` enqueues `CallbackJob` with serialized response/error.
 7. `CallbackJob` invokes the callback service method.
@@ -75,8 +76,9 @@ Background thread that periodically:
 
 Each worker process runs:
 - worker threads for regular Active Job execution
-- one async HTTP processor thread
-- one task monitor thread for heartbeat and orphan recovery
+- one async HTTP processor thread for each processor profile
+- completion worker threads for each processor (`completion_threads`, default 2) that decode responses and deliver results
+- one task monitor thread for heartbeat and orphan recovery, shared by all processors
 
 ## State Management
 
@@ -112,7 +114,7 @@ These callbacks support metrics pipelines (StatsD, Prometheus adapters, etc.) an
 
 ## Testing Behavior
 
-In test mode (`PatientHttp.testing?`), request execution runs synchronously to make specs deterministic while keeping the same public API.
+When `RAILS_ENV`, `RACK_ENV`, or `APP_ENV` is `test`, request execution runs synchronously to make specs deterministic while keeping the same public API.
 
 ## Further Reading
 

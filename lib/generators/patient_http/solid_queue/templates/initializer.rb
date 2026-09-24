@@ -2,9 +2,10 @@
 
 # Configuration for patient_http running on Solid Queue.
 #
-# Every option below is optional and shown with its default. The gem works with
-# no configuration at all: requiring it registers the request handler, and the
-# async processor starts and stops with your Solid Queue workers.
+# Every option below is optional. Each is shown with its default value or with
+# an example value. The gem works with no configuration at all: requiring it
+# registers the request handler, and the async processor starts and stops with
+# your Solid Queue workers.
 #
 # Make requests from anywhere in your application:
 #
@@ -79,7 +80,7 @@ PatientHttp.configure do |config|
   # timeout minus two seconds, and must stay below it.
   # config.shutdown_timeout = 23
 
-  # Called when a callback job exhausts its retries.
+  # Called when Active Job discards a callback job.
   # config.on_retries_exhausted { |error| Sentry.capture_message(error.message) }
 end
 
