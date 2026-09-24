@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The request handler stays registered for the life of the process. `stop` no longer unregisters it, so a request made while the process is shutting down is enqueued for another process to run instead of raising.
 - The default `User-Agent` header is `PatientHttp`, the same as the base gem and the Sidekiq integration. It was `SolidQueue-AsyncHttp`. Set `config.user_agent` to keep the old value.
 - `payload_store_threshold` moved to `PatientHttp::Configuration`, next to `register_payload_store`. It is inherited, so `config.payload_store_threshold` is unchanged. `PatientHttp::SolidQueue::Configuration::DEFAULT_PAYLOAD_STORE_THRESHOLD` now points at the base gem's constant and is deprecated.
+- Minimum Ruby version is 3.3.
 
 ## 1.2.0
 
