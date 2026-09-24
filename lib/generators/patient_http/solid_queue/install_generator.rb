@@ -105,6 +105,10 @@ module PatientHttp
       # 3. Any database whose name contains `queue`.
       # 4. The primary database.
       #
+      # Databases in the current environment are checked first, then databases
+      # in the other environments. Solid Queue often has its own database only
+      # in production, so running the generator in development still finds it.
+      #
       # @return [ActiveRecord::DatabaseConfigurations::DatabaseConfig, nil] The
       #   database configuration, or `nil` if `config/database.yml` can't be
       #   read.
@@ -112,21 +116,22 @@ module PatientHttp
         return @database_config if defined?(@database_config)
 
         @database_config = begin
-          configs = ::ActiveRecord::Base.configurations.configs_for(env_name: ::Rails.env)
+          all_configs = ::ActiveRecord::Base.configurations.configs_for
+          current_env_configs = all_configs.select { |config| config.env_name == ::Rails.env }
+          configs = current_env_configs + (all_configs - current_env_configs)
 
           if options[:database]
             named = configs.find { |config| config.name == options[:database] }
             unless named
               raise ::Rails::Generators::Error.new(
-                "No #{options[:database].inspect} database is configured for the " \
-                "#{::Rails.env} environment in config/database.yml."
+                "No #{options[:database].inspect} database is configured in config/database.yml."
               )
             end
             named
           else
             configs.find { |config| config.name == "queue" } ||
               configs.find { |config| config.name.to_s.include?("queue") } ||
-              configs.find { |config| config.name == "primary" }
+              current_env_configs.find { |config| config.name == "primary" }
           end
         rescue => e
           raise e if e.is_a?(::Rails::Generators::Error)
@@ -145,7 +150,9 @@ module PatientHttp
         name = database_config&.name
         return "db:migrate" if name.nil? || name == "primary"
 
-        "db:migrate:#{name}"
+        task = "db:migrate:#{name}"
+        env_name = database_config.env_name
+        (env_name == ::Rails.env) ? task : "#{task} RAILS_ENV=#{env_name}"
       end
 
       # @return [String] The Rails version stamp for the generated migration

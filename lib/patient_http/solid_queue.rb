@@ -229,11 +229,6 @@ module PatientHttp
         PatientHttp::CallbackValidator.validate!(callback)
         callback_name = callback.is_a?(Class) ? callback.name : callback.to_s
         callback_args = PatientHttp::CallbackValidator.validate_callback_args(callback_args)
-        # The PatientHttp module methods pass nil when the caller did not ask for a
-        # specific behavior, so fall back to the configured default.
-        if raise_error_responses.nil?
-          raise_error_responses = configuration.raise_error_responses
-        end
         request_id = SecureRandom.uuid
         processor_name = (processor || request.processor || :default).to_s
 
@@ -242,6 +237,12 @@ module PatientHttp
         # where the executing process is older than the enqueueing one.
         unless configuration.processor_profiles.key?(processor_name.to_sym)
           raise PatientHttp::UnknownProcessorError.new("No processor profile configured for #{processor_name.inspect}")
+        end
+
+        # The PatientHttp module methods pass nil when the caller did not ask for a
+        # specific behavior, so fall back to the processor profile's setting.
+        if raise_error_responses.nil?
+          raise_error_responses = configuration.processor_config(processor_name).raise_error_responses
         end
 
         encrypted = encrypt(request.as_json)
