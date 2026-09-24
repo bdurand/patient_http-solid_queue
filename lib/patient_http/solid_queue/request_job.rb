@@ -38,19 +38,19 @@ module PatientHttp
         )
       end
 
-      # Loads the request and hands it to the async processor.
+      # Runs the HTTP request on a processor.
       #
-      # @param data [Hash] The request data, or a reference to it in external
-      #   storage.
-      # @param callback_service_name [String] The fully qualified class name of
-      #   the callback service.
+      # @param data [Hash] The serialized request, or a reference to it in
+      #   external storage. The request can be encrypted.
+      # @param callback_service_name [String] The fully qualified callback
+      #   service class name.
       # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx
-      #   responses as errors.
-      # @param callback_args [Hash, nil] Arguments to pass to the callback.
-      # @param request_id [String, nil] A unique request ID for tracking.
+      #   responses as errors. `nil` is the same as `false`.
+      # @param callback_args [Hash, nil] The arguments to pass to the callback.
+      # @param request_id [String, nil] The request ID.
       # @param processor_name [String, nil] The name of the processor profile
-      #   that runs the request. Jobs enqueued by older versions pass `nil`,
-      #   which runs the request on the default processor.
+      #   that runs the request. If `nil`, uses the default processor. Jobs
+      #   enqueued by earlier versions of the gem don't have this argument.
       # @return [void]
       def perform(data, callback_service_name, raise_error_responses, callback_args, request_id, processor_name = nil)
         actual_data = PatientHttp::ExternalStorage.storage_ref?(data) ? PatientHttp::SolidQueue.external_storage.fetch(data) : data

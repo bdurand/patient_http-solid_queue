@@ -2,18 +2,17 @@
 
 module PatientHttp
   module SolidQueue
-    # Active Job implementation of `PatientHttp::TaskHandler`.
+    # Task handler that uses Active Job to deliver results and retry requests.
     #
-    # The handler manages the task lifecycle with Active Job:
-    #
-    # - `CallbackJob` runs the completion and error callbacks.
-    # - `ExternalStorage` stores large payloads before the job is enqueued.
-    # - Retries deserialize and re-enqueue the original Active Job.
+    # - A `CallbackJob` delivers each result to the callback service.
+    # - Large payloads are written to external storage before the job is
+    #   enqueued.
+    # - A retry enqueues the original Active Job again.
     class TaskHandler < PatientHttp::TaskHandler
       # @return [Hash] The serialized Active Job that made the request.
       attr_reader :active_job_data
 
-      # Creates a task handler.
+      # Creates a task handler for an Active Job.
       #
       # @param active_job_data [Hash] The serialized Active Job that made the
       #   request.
@@ -21,7 +20,8 @@ module PatientHttp
         @active_job_data = active_job_data
       end
 
-      # Enqueues a `CallbackJob` that passes the response to the callback.
+      # Enqueues a `CallbackJob` that calls the callback service's `on_complete`
+      # method. A large response is written to external storage first.
       #
       # @param response [PatientHttp::Response] The HTTP response.
       # @param callback [String] The callback service class name.
@@ -32,9 +32,10 @@ module PatientHttp
         delete_stored_request_payload
       end
 
-      # Enqueues a `CallbackJob` that passes the error to the callback.
+      # Enqueues a `CallbackJob` that calls the callback service's `on_error`
+      # method. A large error is written to external storage first.
       #
-      # @param error [PatientHttp::Error] Information about the error.
+      # @param error [PatientHttp::Error] The error.
       # @param callback [String] The callback service class name.
       # @return [void]
       def on_error(error, callback)
@@ -58,7 +59,7 @@ module PatientHttp
         @active_job_data["job_id"]
       end
 
-      # Returns the Active Job class.
+      # Returns the class of the Active Job.
       #
       # @return [Class] The job class.
       def worker_class
@@ -68,10 +69,12 @@ module PatientHttp
       private
 
       # Deletes the externally stored request payload after the request
-      # completes. Until then, the payload must stay available, because Active
-      # Job retries, processor shutdown retries, and crash recovery can
-      # re-enqueue the job that references it. Applies only to `RequestJob`.
-      # Other job types manage their own arguments.
+      # finishes. The payload must stay available until then, because Active Job
+      # retries, processor shutdown retries, and crash recovery can enqueue the
+      # job again. Applies only to `RequestJob` jobs, because other job types
+      # manage their own arguments.
+      #
+      # @return [void]
       def delete_stored_request_payload
         return unless @active_job_data["job_class"] == RequestJob.name
 

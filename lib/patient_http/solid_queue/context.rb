@@ -2,28 +2,27 @@
 
 module PatientHttp
   module SolidQueue
-    # Thread-safe store for the Active Job that the current thread is running.
+    # Stores the current Active Job for each thread.
     #
-    # The store is keyed by thread ID, so async HTTP requests can read the job
-    # data without passing it explicitly. `RequestJob` uses this context to
-    # re-enqueue jobs.
+    # Code that runs in a job reads the job from this class instead of
+    # receiving it as an argument. `RequestJob` uses the job to re-enqueue a
+    # request.
     class Context
       @jobs = Concurrent::Map.new
 
       class << self
-        # Returns the job data for the current thread.
+        # Returns the current Active Job for this thread.
         #
-        # @return [Hash, nil] The serialized Active Job, or `nil` if the thread
-        #   isn't running a job.
+        # @return [Hash, nil] The serialized job, or `nil` if no job is set.
         def current_job
           @jobs[Thread.current.object_id]
         end
 
-        # Sets the job data for the current thread while a block runs.
+        # Sets the current job for the duration of a block.
         #
         # @param job_data [Hash] The serialized Active Job.
-        # @yield Runs with the job data set.
-        # @return [Object] The block's return value.
+        # @yield The block to run.
+        # @return [Object] The return value of the block.
         def with_job(job_data)
           thread_id = Thread.current.object_id
           previous_job = @jobs[thread_id]

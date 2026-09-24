@@ -4,27 +4,29 @@ module PatientHttp
   module SolidQueue
     # Tracks in-flight requests in the database for crash recovery.
     #
-    # The monitor keeps an Active Record record for each in-flight request.
-    # It provides a distributed lock for orphan detection, and it re-enqueues
-    # requests that a process crash interrupted.
+    # The registry keeps an Active Record row for each in-flight request, with
+    # its heartbeat time and its Active Job. If a process crashes, another
+    # process finds the orphaned requests and re-enqueues their jobs. A
+    # distributed lock lets only one process at a time look for orphaned
+    # requests.
     #
-    # Task IDs have the format `hostname:pid:hex/request-uuid`:
+    # Each entry has a registry ID in the format
+    # `hostname:pid:hex/request-uuid`:
     #
-    # - `hostname`: The sanitized hostname, with colons and slashes replaced by
-    #   dashes.
+    # - `hostname`: The host name, with colons and slashes replaced by dashes.
     # - `pid`: The process ID.
-    # - `hex`: An 8-character random hex string for uniqueness.
-    # - `request-uuid`: The unique request ID.
+    # - `hex`: 16 random hex characters that make the ID unique.
+    # - `request-uuid`: The request ID.
     class TaskMonitor
       # Name of the garbage collection lock row.
       GC_LOCK_NAME = "gc"
 
-      # @return [Configuration] The configuration object.
+      # @return [Configuration] The gem configuration.
       attr_reader :config
 
       # Creates a task monitor for this process.
       #
-      # @param config [Configuration] The configuration object.
+      # @param config [Configuration] The gem configuration.
       # @param max_connections [#call, nil] A callable that returns the total
       #   maximum number of connections for the process. Defaults to the
       #   configuration's value. With named processors, the module passes the
@@ -68,10 +70,9 @@ module PatientHttp
         raise RegistrationError.new("Failed to register task #{task_id}: #{e.class} - #{e.message}")
       end
 
-      # Removes a request's record from the database when the request
-      # completes.
+      # Removes a request from the registry.
       #
-      # @param task [PatientHttp::RequestTask] The request task to unregister.
+      # @param task [PatientHttp::RequestTask] The request task.
       # @return [void]
       def unregister(task)
         task_id = full_task_id(task.id)
@@ -106,9 +107,9 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Updates the heartbeat timestamps of multiple requests in one query.
+      # Updates the heartbeat times of requests in one query.
       #
-      # @param task_ids [Array<String>] The request IDs to update.
+      # @param task_ids [Array<String>] The request IDs.
       # @return [void]
       def update_heartbeats(task_ids)
         return if task_ids.empty?
@@ -139,7 +140,7 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Removes this process's registration.
+      # Removes this process from the process registrations.
       #
       # @return [void]
       def remove_process
@@ -233,18 +234,19 @@ module PatientHttp
         reenqueued_count
       end
 
-      # Builds a unique task ID that includes this process's identifier.
+      # Returns the registry ID for a request. The registry ID includes this
+      # process's ID.
       #
-      # @param task_id [String] The request task ID.
-      # @return [String] The unique task ID.
+      # @param task_id [String] The request ID.
+      # @return [String] The registry ID.
       def full_task_id(task_id)
         "#{@lock_identifier}/#{task_id}"
       end
 
-      # Returns whether a task is registered in the in-flight table.
+      # Returns whether a request is in the registry.
       #
       # @param task [PatientHttp::RequestTask] The request task.
-      # @return [Boolean] `true` if the task is registered.
+      # @return [Boolean] `true` if the request is registered.
       # @api private
       def registered?(task)
         with_connection do

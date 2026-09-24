@@ -4,9 +4,9 @@ require "delegate"
 
 module PatientHttp
   module SolidQueue
-    # Configuration for running `PatientHttp` on Solid Queue.
+    # Configuration for the Solid Queue integration.
     #
-    # Extends `PatientHttp::Configuration` with Solid Queue defaults. It adds
+    # Extends `PatientHttp::Configuration` with Solid Queue defaults and adds
     # options for the job queue, crash recovery, and named processor profiles.
     class Configuration < PatientHttp::Configuration
       # Default size in bytes above which payloads are stored externally.
@@ -17,26 +17,26 @@ module PatientHttp
       DEFAULT_PAYLOAD_STORE_THRESHOLD = PatientHttp::Configuration::DEFAULT_PAYLOAD_STORE_THRESHOLD
 
       # @return [Numeric] The number of seconds without a heartbeat after which
-      #   an in-flight request is considered orphaned.
+      #   an in-flight request is considered orphaned and re-enqueued.
       attr_reader :orphan_threshold
 
-      # @return [Numeric] The number of seconds between heartbeat updates.
+      # @return [Numeric] The number of seconds between heartbeat updates for
+      #   in-flight requests.
       attr_reader :heartbeat_interval
 
       # @return [String, nil] The queue name for `RequestJob` and `CallbackJob`.
       attr_reader :queue_name
 
-      # Gets or sets the handler that runs when a `CallbackJob` exhausts its
-      # retries.
+      # Returns or sets the handler that runs when Active Job discards a
+      # `CallbackJob`.
       #
       # @overload on_retries_exhausted
       #   Returns the current handler.
       #   @return [#call, nil] The handler, or `nil` if none is set.
       # @overload on_retries_exhausted(&block)
       #   Sets a block as the handler.
-      #   @yield [error] Runs when a callback job exhausts its retries.
-      #   @yieldparam error [PatientHttp::Error] Information about the error.
-      #   @return [Proc] The handler.
+      #   @yield [error] The block to run when a job is discarded.
+      #   @yieldparam error [PatientHttp::Error] The error from the request.
       def on_retries_exhausted(&block)
         if block
           @on_retries_exhausted = block
@@ -52,18 +52,18 @@ module PatientHttp
       # Creates a configuration.
       #
       # @param heartbeat_interval [Numeric] The number of seconds between
-      #   heartbeat updates. Defaults to 60.
+      #   heartbeat updates for in-flight requests.
       # @param orphan_threshold [Numeric] The number of seconds without a
       #   heartbeat after which an in-flight request is considered orphaned.
-      #   Must be greater than `heartbeat_interval`. Defaults to 300.
       # @param queue_name [String, nil] The queue name for `RequestJob` and
-      #   `CallbackJob`. Defaults to `nil`, which uses the Active Job default
-      #   queue.
-      # @param on_retries_exhausted [#call, nil] The handler that runs when a
-      #   `CallbackJob` exhausts its retries.
-      # @param pool_options [Hash] Other options, passed to
-      #   `PatientHttp::Configuration`.
-      # @raise [ArgumentError] If an option is invalid.
+      #   `CallbackJob`. If `nil`, the Active Job default queue applies.
+      # @param on_retries_exhausted [#call, nil] The handler that runs when
+      #   Active Job discards a `CallbackJob`.
+      # @param pool_options [Hash] Options for `PatientHttp::Configuration`. If
+      #   `shutdown_timeout` isn't set, it defaults to the Solid Queue shutdown
+      #   timeout minus 2 seconds. If `logger` isn't set, it defaults to the
+      #   Solid Queue logger.
+      # @raise [ArgumentError] If an option isn't valid.
       def initialize(
         heartbeat_interval: 60,
         orphan_threshold: 300,
@@ -74,7 +74,6 @@ module PatientHttp
         if ::SolidQueue.shutdown_timeout
           pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
         end
-        pool_options[:user_agent] ||= "SolidQueue-AsyncHttp"
         pool_options[:logger] ||= (defined?(SolidQueue.logger) ? SolidQueue.logger : nil)
 
         super(**pool_options)
@@ -120,23 +119,23 @@ module PatientHttp
         @processor_profiles[normalize_processor_name(name)]
       end
 
-      # Returns all declared processor profiles. The result always includes
-      # `:default`.
+      # Returns all declared processor profiles, including `:default`.
       #
-      # @return [Hash{Symbol => Hash}] Profile options keyed by processor name.
+      # @return [Hash{Symbol => Hash}] The profile options, keyed by processor
+      #   name.
       def processor_profiles
         @processor_profiles.dup
       end
 
-      # Returns the effective configuration for a named processor.
+      # Returns the configuration for a named processor.
       #
-      # A profile with no overrides uses this configuration. Other profiles get
+      # A profile without overrides uses this configuration. Other profiles use
       # a view of this configuration with their overrides applied, so all
-      # profiles share secrets, preprocessors, payload stores, and encryption.
+      # processors share secrets, preprocessors, payload stores, and
+      # encryption.
       #
       # @param name [Symbol, String] The processor name.
-      # @return [PatientHttp::Configuration] The configuration for the
-      #   processor.
+      # @return [PatientHttp::Configuration] The configuration for the processor.
       # @raise [ArgumentError] If the profile isn't declared.
       def processor_config(name)
         key = normalize_processor_name(name)
@@ -148,10 +147,13 @@ module PatientHttp
         ProfileConfiguration.new(self, profile)
       end
 
-      # Sets the number of seconds between heartbeat updates.
+      # Sets the number of seconds between heartbeat updates for in-flight
+      # requests.
       #
-      # @param value [Numeric] A positive number less than `orphan_threshold`.
-      # @raise [ArgumentError] If the value isn't positive, or isn't less than
+      # @param value [Numeric] The interval in seconds. Must be positive and less
+      #   than `orphan_threshold`.
+      # @return [void]
+      # @raise [ArgumentError] If `value` isn't positive or isn't less than
       #   `orphan_threshold`.
       def heartbeat_interval=(value)
         raise ArgumentError, "heartbeat_interval must be positive, got: #{value.inspect}" unless value.positive?
@@ -160,12 +162,13 @@ module PatientHttp
       end
 
       # Sets the number of seconds without a heartbeat after which an in-flight
-      # request is considered orphaned.
+      # request is considered orphaned and re-enqueued.
       #
-      # @param value [Numeric] A positive number greater than
+      # @param value [Numeric] The threshold in seconds. Must be positive and
+      #   greater than `heartbeat_interval`.
+      # @return [void]
+      # @raise [ArgumentError] If `value` isn't positive or isn't greater than
       #   `heartbeat_interval`.
-      # @raise [ArgumentError] If the value isn't positive, or isn't greater
-      #   than `heartbeat_interval`.
       def orphan_threshold=(value)
         raise ArgumentError, "orphan_threshold must be positive, got: #{value.inspect}" unless value.positive?
         @orphan_threshold = value
@@ -174,9 +177,10 @@ module PatientHttp
 
       # Sets the queue name for `RequestJob` and `CallbackJob`.
       #
-      # @param name [String, nil] The queue name, or `nil` to use the Active
-      #   Job default queue.
-      # @raise [ArgumentError] If the name isn't a string or `nil`.
+      # @param name [String, nil] The queue name, or `nil` to use the Active Job
+      #   default queue.
+      # @return [void]
+      # @raise [ArgumentError] If `name` isn't `nil` or a String.
       def queue_name=(name)
         if name.nil?
           @queue_name = nil
@@ -188,12 +192,14 @@ module PatientHttp
         apply_queue_name(name)
       end
 
-      # Sets the handler that runs when a `CallbackJob` exhausts its retries.
-      # The handler receives the same argument as the `on_error` callback.
+      # Sets the handler that runs when Active Job discards a `CallbackJob`. The
+      # handler receives the same error object as the `on_error` callback.
       #
-      # @param value [#call, nil] A callable object, or `nil` to clear the
+      # @param value [#call, nil] A callable object, or `nil` to remove the
       #   handler.
-      # @raise [ArgumentError] If the value isn't callable and isn't `nil`.
+      # @return [void]
+      # @raise [ArgumentError] If `value` isn't `nil` and doesn't respond to
+      #   `call`.
       def on_retries_exhausted=(value)
         if value && !value.respond_to?(:call)
           raise ArgumentError.new("on_retries_exhausted must respond to #call, got: #{value.class}")
@@ -202,9 +208,10 @@ module PatientHttp
         @on_retries_exhausted = value
       end
 
-      # Returns the configuration as a hash for logging and inspection.
+      # Returns the configuration as a Hash for inspection.
       #
-      # @return [Hash] The configuration values keyed by option name.
+      # @return [Hash{String => Object}] The option values, keyed by option
+      #   name.
       def to_h
         super.merge(
           "heartbeat_interval" => heartbeat_interval,
@@ -215,10 +222,10 @@ module PatientHttp
         )
       end
 
-      # A view of a base configuration with a profile's option overrides
-      # applied. Options that the profile doesn't override delegate to the base
-      # configuration. This includes secrets, preprocessors, payload stores,
-      # encryption, and logging, so all processors share them.
+      # A view of a base configuration with a processor profile's overrides
+      # applied. Options that the profile doesn't override, such as secrets,
+      # preprocessors, payload stores, and the logger, come from the base
+      # configuration, so all processors share them.
       class ProfileConfiguration < SimpleDelegator
         # Creates a view of the base configuration.
         #

@@ -42,16 +42,15 @@ module PatientHttp
         end
       end
 
-      # Loads the result and calls the callback service.
+      # Calls the callback service with the result.
       #
-      # @param data [Hash] The response or error data, or a reference to it in
-      #   external storage.
-      # @param result_type [String] The result type, either `"response"` or
-      #   `"error"`.
-      # @param callback_service_name [String] The fully qualified class name of
-      #   the callback service.
+      # @param data [Hash] The serialized Response or Error, or a reference to
+      #   it in external storage. The data can be encrypted.
+      # @param result_type [String] The result type: `"response"` or `"error"`.
+      # @param callback_service_name [String] The fully qualified callback
+      #   service class name.
       # @return [void]
-      # @raise [ArgumentError] If the result type is unknown.
+      # @raise [ArgumentError] If `result_type` isn't valid.
       def perform(data, result_type, callback_service_name)
         callback_service_class = PatientHttp::ClassHelper.resolve_class_name(callback_service_name)
         callback_service = callback_service_class.new

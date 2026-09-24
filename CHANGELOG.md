@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `config.raise_error_responses` applies to requests made with the `PatientHttp` module methods. The module methods pass `nil` when a request doesn't set the option, and `nil` was treated as `false`, so the configured default was ignored.
 - **The shipped migration could not be run.** Its file was named `create_solid_queue_async_http_tables.rb` while the class inside it was `CreatePatientHttpSolidQueueTables`, so `db:migrate` raised `NameError: uninitialized constant CreateSolidQueueAsyncHttpTables` after copying it with `patient_http_solid_queue:install:migrations`. The file is now named to match its class. Applications that worked around this by renaming the file themselves are unaffected.
 
 ### Changed
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`configure` now accumulates instead of replacing.** It yields the one configuration object for the process rather than building a new one each time, so several initializers can each contribute options and a second call no longer discards what an earlier one registered. Code that relied on `configure` resetting the configuration should call `reset_configuration!` first.
 - The configuration is created on first use and published to `PatientHttp` at that moment. Previously it was published only inside `configure`, so a process that started a processor without calling `configure` never received module level secrets registered with `PatientHttp.register_secret`.
 - The request handler stays registered for the life of the process. `stop` no longer unregisters it, so a request made while the process is shutting down is enqueued for another process to run instead of raising.
+- The default `User-Agent` header is `PatientHttp`, the same as the base gem and the Sidekiq integration. It was `SolidQueue-AsyncHttp`. Set `config.user_agent` to keep the old value.
 - `payload_store_threshold` moved to `PatientHttp::Configuration`, next to `register_payload_store`. It is inherited, so `config.payload_store_threshold` is unchanged. `PatientHttp::SolidQueue::Configuration::DEFAULT_PAYLOAD_STORE_THRESHOLD` now points at the base gem's constant and is deprecated.
 
 ## 1.2.0

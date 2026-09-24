@@ -6,8 +6,8 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
   subject(:config) { described_class.new }
 
   describe "defaults" do
-    it "sets user_agent to SolidQueue-AsyncHttp" do
-      expect(config.user_agent).to eq("SolidQueue-AsyncHttp")
+    it "uses the base gem's default user_agent" do
+      expect(config.user_agent).to eq("PatientHttp")
     end
 
     it "sets heartbeat_interval to 60" do

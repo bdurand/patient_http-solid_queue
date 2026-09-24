@@ -2,7 +2,7 @@
 
 module PatientHttp
   module SolidQueue
-    # Runs HTTP requests on the async processor.
+    # Runs HTTP requests on a processor in the current process.
     class RequestExecutor
       class << self
         # Hands the request to the async processor.

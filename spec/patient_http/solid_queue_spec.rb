@@ -209,6 +209,29 @@ RSpec.describe PatientHttp::SolidQueue do
       result = described_class.execute(request, callback: callback_class)
       expect(result).to be_a(String)
     end
+
+    it "uses the configured raise_error_responses when none is given" do
+      described_class.configuration.raise_error_responses = true
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      described_class.execute(request, callback: callback_class)
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:args][2]).to be true
+    end
+
+    it "uses the raise_error_responses from the module methods' default" do
+      described_class.configuration.raise_error_responses = true
+      PatientHttp.get("https://example.com", callback: callback_class)
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:args][2]).to be true
+    end
+
+    it "uses an explicit raise_error_responses over the configuration" do
+      described_class.configuration.raise_error_responses = true
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      described_class.execute(request, callback: callback_class, raise_error_responses: false)
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(job[:args][2]).to be false
+    end
   end
 
   describe ".encrypt" do

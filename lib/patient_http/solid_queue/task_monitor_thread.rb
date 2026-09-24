@@ -2,15 +2,15 @@
 
 module PatientHttp
   module SolidQueue
-    # Background thread that updates heartbeats and runs garbage collection
-    # for in-flight HTTP requests.
+    # Background thread that updates heartbeats for in-flight requests and
+    # re-enqueues orphaned requests.
     class TaskMonitorThread
       include PatientHttp::TimeHelper
 
       # Maximum seconds to sleep between monitor thread checks.
       MAX_MONITOR_SLEEP = 5.0
 
-      # @return [Configuration] The configuration object.
+      # @return [Configuration] The gem configuration.
       attr_reader :config
 
       # @return [TaskMonitor] The in-flight request registry.
@@ -18,7 +18,7 @@ module PatientHttp
 
       # Creates the monitor thread. Call {#start} to run it.
       #
-      # @param config [Configuration] The configuration object.
+      # @param config [Configuration] The gem configuration.
       # @param task_monitor [TaskMonitor] The in-flight request registry.
       # @param tracked_ids_callback [Proc] A callable that returns the IDs of
       #   all requests that the processors track, including queued, pending,
@@ -32,7 +32,7 @@ module PatientHttp
         @stop_signal = Concurrent::Event.new
       end
 
-      # Starts the monitor thread.
+      # Starts the thread. Has no effect if the thread is running.
       #
       # @return [void]
       def start
@@ -51,7 +51,8 @@ module PatientHttp
         @thread.name = "async-http-monitor"
       end
 
-      # Stops the monitor thread.
+      # Stops the thread. Waits up to 1 second for the thread to finish, and
+      # then kills it.
       #
       # @return [void]
       def stop
@@ -62,9 +63,9 @@ module PatientHttp
         @thread = nil
       end
 
-      # Returns whether the monitor thread is running.
+      # Returns whether the thread is running.
       #
-      # @return [Boolean] `true` if the monitor thread is running.
+      # @return [Boolean] `true` if the thread is running.
       def running?
         @running.true?
       end

@@ -16,13 +16,13 @@ module PatientHttp
     # re-enqueued. If result delivery fails, the observer keeps the entry, so
     # the orphan collector re-enqueues the request instead of losing it.
     class ProcessorObserver < PatientHttp::ProcessorObserver
-      # @return [TaskMonitor] The shared crash recovery registry.
+      # @return [TaskMonitor] The in-flight request registry.
       attr_reader :task_monitor
 
       # Creates an observer for a processor.
       #
       # @param processor [PatientHttp::Processor] The processor to observe.
-      # @param task_monitor [TaskMonitor] The shared crash recovery registry.
+      # @param task_monitor [TaskMonitor] The in-flight request registry.
       def initialize(processor, task_monitor:)
         @processor = processor
         @task_monitor = task_monitor
@@ -30,26 +30,28 @@ module PatientHttp
         @requeued_mutex = Mutex.new
       end
 
-      # Registers a task that the processor accepted.
+      # Adds a request to the crash-recovery registry.
       #
-      # @param request_task [PatientHttp::RequestTask] The accepted task.
+      # @param request_task [PatientHttp::RequestTask] The request task.
       # @return [void]
-      # @raise [RegistrationError] If the registry record can't be written.
+      # @raise [RegistrationError] If the registry entry can't be written.
       def request_enqueued(request_task)
         task_monitor.register(request_task)
       end
 
-      # Unregisters a task that the processor rejected.
+      # Removes a rejected request from the crash-recovery registry. An Active
+      # Job owns the request again.
       #
-      # @param request_task [PatientHttp::RequestTask] The rejected task.
+      # @param request_task [PatientHttp::RequestTask] The request task.
       # @return [void]
       def request_rejected(request_task)
         task_monitor.unregister(request_task)
       end
 
-      # Unregisters a task that the processor re-enqueued as an Active Job.
+      # Removes a re-enqueued request from the crash-recovery registry. An
+      # Active Job owns the request again.
       #
-      # @param request_task [PatientHttp::RequestTask] The re-enqueued task.
+      # @param request_task [PatientHttp::RequestTask] The request task.
       # @return [void]
       def request_requeued(request_task)
         task_monitor.unregister(request_task)
@@ -63,9 +65,9 @@ module PatientHttp
         @requeued_mutex.synchronize { @requeued_task_ids << request_task.id }
       end
 
-      # Unregisters a task when its request ends.
+      # Removes a finished request from the crash-recovery registry.
       #
-      # @param request_task [PatientHttp::RequestTask] The finished task.
+      # @param request_task [PatientHttp::RequestTask] The request task.
       # @return [void]
       def request_end(request_task)
         requeued = @requeued_mutex.synchronize { @requeued_task_ids.delete?(request_task.id) }
@@ -74,11 +76,12 @@ module PatientHttp
         task_monitor.unregister(request_task)
       end
 
-      # Releases a task whose result couldn't be delivered, so the orphan
-      # collector re-enqueues it, and logs the error.
+      # Handles a failure to deliver a request's result. Keeps the
+      # crash-recovery record and releases it, so that the orphan collector
+      # re-enqueues the request, and logs the error.
       #
-      # @param request_task [PatientHttp::RequestTask] The task.
-      # @param error [Exception] The delivery error.
+      # @param request_task [PatientHttp::RequestTask] The request task.
+      # @param error [Exception] The delivery failure.
       # @return [void]
       def completion_failed(request_task, error)
         # Keep the crash-recovery registry entry, but hand it off to the orphan
