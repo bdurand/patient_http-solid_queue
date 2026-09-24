@@ -184,6 +184,33 @@ RSpec.describe PatientHttp::SolidQueue do
     end
   end
 
+  describe ".stop" do
+    let(:callback_class) do
+      klass = Class.new do
+        def on_complete(response)
+        end
+
+        def on_error(error)
+        end
+      end
+      stub_const("TestCallback", klass)
+      klass
+    end
+
+    it "keeps the request handler registered so requests made while stopping are enqueued" do
+      described_class.start
+      described_class.stop
+
+      request = PatientHttp::Request.new(:get, "https://example.com")
+      request_id = PatientHttp.execute(request: request, callback: callback_class)
+
+      job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
+      expect(PatientHttp.handler_registered?).to be(true)
+      expect(job[:job]).to eq(PatientHttp::SolidQueue::RequestJob)
+      expect(job[:args][4]).to eq(request_id)
+    end
+  end
+
   describe ".execute" do
     let(:callback_class) do
       klass = Class.new do

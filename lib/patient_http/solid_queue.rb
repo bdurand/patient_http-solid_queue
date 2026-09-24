@@ -314,9 +314,6 @@ module PatientHttp
       #   configuration option.
       # @return [void]
       def stop(timeout: nil)
-        # The request handler stays registered. A request made while the process
-        # is shutting down is enqueued and run by another process, which is
-        # better than raising because no handler is registered.
         @lifecycle_mutex.synchronize do
           return if @processors.empty?
 

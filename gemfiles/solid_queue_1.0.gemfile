@@ -10,5 +10,6 @@ gem "rake"
 gem "rspec", "~> 3.11"
 gem "solid_queue", "~> 1.0.0"
 gem "railties", "~> 7.1.0"
+gem "json", "< 3.0"
 
 gemspec path: "../"
