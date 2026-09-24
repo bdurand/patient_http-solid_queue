@@ -2,27 +2,32 @@
 
 module PatientHttp
   module SolidQueue
-    # Manages inflight request tracking in the database for crash recovery.
+    # Tracks in-flight requests in the database for crash recovery.
     #
-    # This class maintains Active Record records for each in-flight request.
-    # It provides distributed locking for orphan detection and automatic
-    # re-enqueueing of requests interrupted by process crashes.
+    # Keeps an Active Record record for each in-flight request. Uses a
+    # distributed lock so that one process at a time detects orphaned requests,
+    # and re-enqueues requests that a process crash interrupted.
     #
-    # Task ID format: "hostname:pid:hex/request-uuid"
-    # - hostname: sanitized hostname (colons and slashes replaced with dashes)
-    # - pid: process ID
-    # - hex: 8-character random hex for uniqueness
-    # - request-uuid: unique identifier for the request
+    # Task IDs have the format +hostname:pid:hex/request-uuid+:
+    #
+    # - +hostname+: The host name, with colons and slashes replaced by dashes.
+    # - +pid+: The process ID.
+    # - +hex+: Eight random hexadecimal characters that make the ID unique.
+    # - +request-uuid+: The unique ID of the request.
     class TaskMonitor
+      # Name of the row in the garbage collection lock table.
       GC_LOCK_NAME = "gc"
 
-      # @return [Configuration] the configuration object
+      # @return [Configuration] The configuration.
       attr_reader :config
 
-      # @param config [Configuration] the configuration object
-      # @param max_connections [#call, nil] callable returning the process's total
-      #   configured max connections; defaults to the configuration's value. With
-      #   named processors the module passes a sum across all processors.
+      # Creates a task monitor for the current process.
+      #
+      # @param config [Configuration] The configuration.
+      # @param max_connections [#call, nil] A callable that returns the total
+      #   maximum connections for the process. Defaults to the configuration's
+      #   +max_connections+. With named processors, the
+      #   +PatientHttp::SolidQueue+ module passes the sum across all processors.
       def initialize(config, max_connections: nil)
         @config = config
         @max_connections_source = max_connections || -> { config.max_connections }
@@ -31,17 +36,18 @@ module PatientHttp
         @lock_identifier = "#{hostname}:#{pid}:#{SecureRandom.hex(8)}".freeze
       end
 
-      # Register a request as inflight in the database.
+      # Records a request as in flight in the database.
       #
-      # Runs on the caller's thread via the request_enqueued observer event.
-      # Errors propagate so a task is never accepted without a durable record:
-      # the processor rejects the task and the enqueue raises to the caller.
-      # They are wrapped in RegistrationError so the job retries instead of
-      # failing outright, since the usual cause is a transient database issue.
+      # Runs on the caller's thread from the +request_enqueued+ observer event.
+      # Errors propagate so that the processor never accepts a task without a
+      # durable record. The processor rejects the task, and the enqueue raises
+      # an error to the caller. The error is a {RegistrationError}, so the job
+      # retries instead of failing, because the usual cause is a temporary
+      # database issue.
       #
-      # @param task [PatientHttp::RequestTask] the request task to register
-      # @raise [RegistrationError] if the record cannot be written
+      # @param task [PatientHttp::RequestTask] The request task to register.
       # @return [void]
+      # @raise [RegistrationError] If the record can't be written.
       def register(task)
         job_payload = task.task_handler.active_job_data.to_json
         task_id = full_task_id(task.id)
@@ -61,9 +67,10 @@ module PatientHttp
         raise RegistrationError.new("Failed to register task #{task_id}: #{e.class} - #{e.message}")
       end
 
-      # Unregister a request from the database (called when request completes).
+      # Deletes a request's record from the database. Call this when the
+      # request completes.
       #
-      # @param task [PatientHttp::RequestTask] the request task to unregister
+      # @param task [PatientHttp::RequestTask] The request task to unregister.
       # @return [void]
       def unregister(task)
         task_id = full_task_id(task.id)
@@ -75,14 +82,16 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Release a request from this process so the orphan collector re-enqueues
-      # it on its next pass. Used when a result could not be delivered: the
-      # request is no longer tracked here, so its record must not keep looking
-      # like it belongs to a live process. Orphan collection skips records
-      # whose process is still registered, which would otherwise strand the
-      # request until this process exits.
+      # Releases a request from this process so the orphan collector
+      # re-enqueues it on its next pass.
       #
-      # @param task [PatientHttp::RequestTask] the request task to release
+      # Use this when a result can't be delivered. This process no longer
+      # tracks the request, so its record must not look like it belongs to a
+      # live process. Orphan collection skips records whose process is still
+      # registered, so without a release the request waits until this process
+      # exits.
+      #
+      # @param task [PatientHttp::RequestTask] The request task to release.
       # @return [void]
       def release(task)
         task_id = full_task_id(task.id)
@@ -97,9 +106,9 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Update heartbeat timestamps for multiple requests in a single operation.
+      # Updates the heartbeat timestamps of multiple requests in one query.
       #
-      # @param task_ids [Array<String>] the request IDs to update
+      # @param task_ids [Array<String>] The request IDs to update.
       # @return [void]
       def update_heartbeats(task_ids)
         return if task_ids.empty?
@@ -113,7 +122,7 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Record or refresh this process's registration.
+      # Creates or refreshes this process's registration.
       #
       # @return [void]
       def ping_process
@@ -130,7 +139,7 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Remove this process's registration.
+      # Deletes this process's registration.
       #
       # @return [void]
       def remove_process
@@ -142,14 +151,15 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Try to acquire the distributed garbage collection lock.
+      # Tries to acquire the distributed garbage collection lock.
       #
-      # Uses a single semaphore row and pessimistic locking to ensure only one
-      # process can claim the lock at a time.
-      # Returns false if another process holds a non-expired lock, or if GC was
-      # run recently (within heartbeat_interval).
+      # Uses a single semaphore row with pessimistic locking, so only one
+      # process can hold the lock at a time. Returns +false+ if another process
+      # holds an unexpired lock, or if garbage collection ran within the last
+      # +heartbeat_interval+ seconds.
       #
-      # @return [Boolean] true if lock acquired, false otherwise
+      # @return [Boolean] +true+ if this process acquired the lock; otherwise,
+      #   +false+.
       def acquire_gc_lock
         now = Time.current
         expires_at = now + gc_lock_ttl.seconds
@@ -181,7 +191,8 @@ module PatientHttp
         false
       end
 
-      # Release the garbage collection lock if held by this process, and record last_gc_at.
+      # Releases the garbage collection lock if this process holds it, and sets
+      # +last_gc_at+.
       #
       # @return [void]
       def release_gc_lock
@@ -192,11 +203,12 @@ module PatientHttp
         raise if PatientHttp.testing?
       end
 
-      # Find and re-enqueue orphaned requests.
+      # Finds orphaned requests and re-enqueues their jobs.
       #
-      # @param orphan_threshold_seconds [Numeric] age threshold for considering a request orphaned
-      # @param logger [Logger] logger for output
-      # @return [Integer] number of orphaned requests re-enqueued
+      # @param orphan_threshold_seconds [Numeric] The number of seconds without a
+      #   heartbeat after which a request counts as orphaned.
+      # @param logger [Logger, nil] The logger for status messages.
+      # @return [Integer] The number of orphaned requests re-enqueued.
       def cleanup_orphaned_requests(orphan_threshold_seconds, logger)
         threshold = Time.current - orphan_threshold_seconds.seconds
 
@@ -222,18 +234,18 @@ module PatientHttp
         reenqueued_count
       end
 
-      # Build unique task ID for a request task that includes process identifier.
+      # Returns a unique task ID that includes this process's identifier.
       #
-      # @param task_id [String] the request task ID
-      # @return [String] the unique task ID
+      # @param task_id [String] The request task ID.
+      # @return [String] The unique task ID.
       def full_task_id(task_id)
         "#{@lock_identifier}/#{task_id}"
       end
 
-      # Check if a task is registered in the inflight table.
+      # Returns whether a task has a record in the in-flight requests table.
       #
-      # @param task [PatientHttp::RequestTask] the request task
-      # @return [Boolean]
+      # @param task [PatientHttp::RequestTask] The request task.
+      # @return [Boolean] +true+ if the task is registered; otherwise, +false+.
       # @api private
       def registered?(task)
         with_connection do
@@ -241,10 +253,10 @@ module PatientHttp
         end
       end
 
-      # Clear all records. Only allowed in test environment.
+      # Deletes all records. Works only in test mode.
       #
-      # @raise [RuntimeError] if called outside of test environment
       # @return [void]
+      # @raise [RuntimeError] If called outside test mode.
       # @api private
       def self.clear_all!
         unless PatientHttp.testing?
@@ -258,15 +270,16 @@ module PatientHttp
 
       private
 
-      # Check out a database connection only for the duration of the work so
-      # gem-owned threads (completion workers, the monitor thread) do not pin
-      # connections from the pool between operations.
+      # Checks out a database connection only while the block runs. This keeps
+      # the gem's threads, such as completion workers and the monitor thread,
+      # from holding pool connections between operations.
       def with_connection(&block)
         Record.connection_pool.with_connection(&block)
       end
 
-      # Process identifier stamped on released records. It is never registered
-      # in the process table, so orphan collection always considers it dead.
+      # Returns the process identifier for released records. This identifier is
+      # never in the process table, so orphan collection always treats it as
+      # dead.
       def released_process_id
         "#{@lock_identifier}:released"
       end
@@ -275,29 +288,33 @@ module PatientHttp
         GcLock.insert_all([{lock_name: GC_LOCK_NAME}])
       end
 
-      # MySQL does not support an explicit conflict target for upserts; it always
-      # resolves conflicts via the table's unique indexes (ON DUPLICATE KEY UPDATE).
-      # Adapters with conflict targets (PostgreSQL, SQLite) require one to be given.
+      # Returns the conflict target for an upsert. MySQL doesn't support an
+      # explicit conflict target and always resolves conflicts with the table's
+      # unique indexes (+ON DUPLICATE KEY UPDATE+). Adapters that support
+      # conflict targets, such as PostgreSQL and SQLite, require one.
       #
-      # @param column [Symbol] the unique column to use as the conflict target
-      # @return [Symbol, nil] the column, or nil when the adapter forbids a target
+      # @param column [Symbol] The unique column to use as the conflict target.
+      # @return [Symbol, nil] The column, or +nil+ if the adapter doesn't allow a
+      #   target.
       def upsert_unique_by(column)
         Record.connection.supports_insert_conflict_target? ? column : nil
       end
 
-      # Re-enqueue a single orphaned record.
+      # Re-enqueues the job for one orphaned record.
       #
-      # Uses a claim-by-exact-heartbeat update to handle race conditions: if the
-      # heartbeat was updated between our read and the claim, the update returns
-      # 0 rows and we skip re-enqueueing. Claiming (refreshing the heartbeat)
-      # before enqueueing means a crash mid-recovery leaves the record behind to
-      # go stale and be retried by a later GC pass, instead of losing the request.
-      # The record is only deleted after the job has been enqueued.
+      # Claims the record with an update that matches its exact heartbeat. If
+      # another process updated the heartbeat after the read, the update
+      # matches no rows and this method skips the record. The claim refreshes
+      # the heartbeat before the job is enqueued. If the process crashes during
+      # recovery, the record goes stale again and a later garbage collection
+      # pass retries it, so the request isn't lost. The record is deleted only
+      # after the job is enqueued.
       #
-      # @param record [InflightRequest] the orphaned record
-      # @param threshold [Float] heartbeat threshold (only records below this are orphaned)
-      # @param logger [Logger] logger for output
-      # @return [Boolean] true if successfully re-enqueued
+      # @param record [InflightRequest] The orphaned record.
+      # @param threshold [Time] The heartbeat cutoff. Only records with an older
+      #   heartbeat count as orphaned.
+      # @param logger [Logger, nil] The logger for status messages.
+      # @return [Boolean] +true+ if the job was re-enqueued; otherwise, +false+.
       def reenqueue_orphaned_record(record, threshold, logger)
         # Atomically claim only if still orphaned (heartbeat unchanged). The dead
         # process_id is left in place so a failed recovery becomes orphaned again.

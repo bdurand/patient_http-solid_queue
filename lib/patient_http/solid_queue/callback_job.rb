@@ -2,14 +2,15 @@
 
 module PatientHttp
   module SolidQueue
-    # Active Job that invokes callback services for HTTP request results.
+    # Active Job that calls callback services with HTTP request results.
     #
-    # Receives serialized Response or Error data and invokes the appropriate
-    # callback service method (+on_complete+ or +on_error+).
+    # Receives serialized +Response+ or +Error+ data and calls the matching
+    # callback service method, +on_complete+ or +on_error+.
     #
     # @api private
     class CallbackJob < ActiveJob::Base
-      # Clean up externally stored payloads when job exhausts all retries.
+      # Runs the retries-exhausted handler for error results and deletes any
+      # externally stored payload when Active Job discards the job.
       after_discard do |job, _exception|
         data = job.arguments[0]
         result_type = job.arguments[1]
@@ -41,9 +42,15 @@ module PatientHttp
         end
       end
 
-      # @param data [Hash] Response or Error data (possibly a storage reference)
-      # @param result_type [String] "response" or "error" indicating the type of result
-      # @param callback_service_name [String] Fully qualified callback service class name
+      # Calls the callback service with the result of an HTTP request.
+      #
+      # @param data [Hash] The +Response+ or +Error+ data, or a reference to it in
+      #   external storage.
+      # @param result_type [String] The type of result: +"response"+ or +"error"+.
+      # @param callback_service_name [String] The fully qualified class name of the
+      #   callback service.
+      # @return [void]
+      # @raise [ArgumentError] If +result_type+ isn't recognized.
       def perform(data, result_type, callback_service_name)
         callback_service_class = PatientHttp::ClassHelper.resolve_class_name(callback_service_name)
         callback_service = callback_service_class.new

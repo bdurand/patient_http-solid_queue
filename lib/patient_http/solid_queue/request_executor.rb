@@ -2,21 +2,32 @@
 
 module PatientHttp
   module SolidQueue
-    # Helper methods for executing HTTP requests asynchronously.
+    # Runs HTTP requests on the asynchronous processor.
     class RequestExecutor
       class << self
-        # Execute the request directly on the async processor.
+        # Sends a request to a processor. In test mode, or if +synchronous+ is
+        # +true+, runs the request in the current thread instead.
         #
-        # @param request [PatientHttp::Request] the HTTP request to execute
-        # @param callback [Class, String] Callback service class or its fully qualified class name
-        # @param active_job_data [Hash, nil] Active Job serialized hash with "job_class" and "arguments" keys
-        # @param synchronous [Boolean] If true, runs the request inline (for testing)
-        # @param callback_args [#to_h, nil] Arguments to pass to callback
-        # @param raise_error_responses [Boolean] If true, treats non-2xx responses as errors
-        # @param request_id [String, nil] Unique request ID for tracking
-        # @param processor_name [Symbol, String, nil] Name of the processor profile to run
-        #   the request on. Defaults to the request's own processor name or :default.
-        # @return [String] the request ID
+        # @param request [PatientHttp::Request] The HTTP request to run.
+        # @param callback [Class, String] The callback service class, or its fully
+        #   qualified class name.
+        # @param active_job_data [Hash, nil] The serialized Active Job hash, with
+        #   +"job_class"+ and +"arguments"+ keys. Defaults to the job in {Context}.
+        # @param synchronous [Boolean] If +true+, runs the request in the current
+        #   thread. Use this in tests.
+        # @param callback_args [#to_h, nil] Arguments to pass to the callback.
+        # @param raise_error_responses [Boolean] If +true+, treats non-2xx
+        #   responses as errors.
+        # @param request_id [String, nil] A unique request ID for tracking.
+        # @param processor_name [Symbol, String, nil] The name of the processor
+        #   profile that runs the request. Defaults to the request's processor
+        #   name, or +:default+ if the request doesn't set one.
+        # @return [String] The request ID.
+        # @raise [ArgumentError] If +active_job_data+ is missing or invalid.
+        # @raise [PatientHttp::UnknownProcessorError] If the processor profile
+        #   isn't configured.
+        # @raise [PatientHttp::NotRunningError] If the processor isn't running.
+        # @raise [PatientHttp::MaxCapacityError] If the processor is at capacity.
         # @api private
         def execute(
           request,

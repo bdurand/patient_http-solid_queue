@@ -2,11 +2,11 @@
 
 module PatientHttp
   module SolidQueue
-    # Active Job that executes HTTP requests asynchronously.
+    # Active Job that sends HTTP requests to the asynchronous processor.
     #
-    # Enqueued when calling PatientHttp::SolidQueue.get, .post, etc.
-    # On completion, the specified callback service's on_complete or on_error is
-    # invoked via CallbackJob.
+    # {PatientHttp::SolidQueue.execute} enqueues this job. When the request
+    # finishes, +CallbackJob+ calls the callback service's +on_complete+ or
+    # +on_error+ method.
     #
     # @api private
     class RequestJob < ActiveJob::Base
@@ -22,14 +22,14 @@ module PatientHttp
       # it a bounded number of retries before the job is marked failed.
       retry_on PatientHttp::SolidQueue::RegistrationError, wait: :polynomially_longer, attempts: 10
 
-      # Capture the Active Job serialized hash into Context so RequestExecutor can use it.
+      # Stores the serialized job in {Context} so that {RequestExecutor} can read it.
       around_perform do |job, block|
         PatientHttp::SolidQueue::Context.with_job(job.serialize) { block.call }
       end
 
-      # Clean up the externally stored request payload when the job is discarded.
-      # The payload is normally deleted by TaskHandler when the request completes,
-      # so this only fires for requests that never made it that far.
+      # Deletes the externally stored request payload when Active Job discards the
+      # job. {TaskHandler} normally deletes the payload when the request completes,
+      # so this hook matters only for requests that never complete.
       after_discard do |job, _exception|
         PatientHttp::SolidQueue.external_storage.delete(job.arguments[0])
       rescue => e
@@ -38,13 +38,20 @@ module PatientHttp
         )
       end
 
-      # @param data [Hash] Request data (possibly a storage reference)
-      # @param callback_service_name [String] Fully qualified callback service class name
-      # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx responses as errors
-      # @param callback_args [Hash, nil] Arguments to pass to the callback
-      # @param request_id [String, nil] Unique request ID for tracking
-      # @param processor_name [String, nil] Name of the processor profile to run the request
-      #   on; nil (jobs enqueued by older versions) runs on the default processor
+      # Loads the request and sends it to the processor.
+      #
+      # @param data [Hash] The request data, or a reference to it in external
+      #   storage.
+      # @param callback_service_name [String] The fully qualified class name of the
+      #   callback service.
+      # @param raise_error_responses [Boolean, nil] Whether to treat non-2xx
+      #   responses as errors.
+      # @param callback_args [Hash, nil] Arguments to pass to the callback.
+      # @param request_id [String, nil] A unique request ID for tracking.
+      # @param processor_name [String, nil] The name of the processor profile that
+      #   runs the request. Jobs enqueued by older gem versions pass +nil+ and run
+      #   on the default processor.
+      # @return [void]
       def perform(data, callback_service_name, raise_error_responses, callback_args, request_id, processor_name = nil)
         actual_data = PatientHttp::ExternalStorage.storage_ref?(data) ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
         actual_data = PatientHttp::SolidQueue.decrypt(actual_data)

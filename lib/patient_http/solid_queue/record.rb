@@ -2,7 +2,8 @@
 
 module PatientHttp
   module SolidQueue
-    # Base Active Record class for patient_http-solid_queue models.
+    # Base Active Record class for the gem's models. Uses the Solid Queue
+    # database.
     class Record < ::SolidQueue::Record
       self.abstract_class = true
     end

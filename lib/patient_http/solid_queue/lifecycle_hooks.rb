@@ -2,11 +2,15 @@
 
 module PatientHttp
   module SolidQueue
-    # Registers lifecycle hooks with SolidQueue to start/stop the async HTTP processor.
+    # Registers Solid Queue lifecycle hooks that start and stop the processors.
     class LifecycleHooks
       @registered = false
 
       class << self
+        # Registers the worker start and stop hooks with Solid Queue. Calling
+        # this method more than once has no effect.
+        #
+        # @return [void]
         def register
           return if @registered
 
