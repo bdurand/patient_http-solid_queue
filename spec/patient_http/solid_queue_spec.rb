@@ -53,6 +53,25 @@ RSpec.describe PatientHttp::SolidQueue do
       PatientHttp.default_configuration = nil
     end
 
+    it "logs a warning when the configuration changes while processors run" do
+      output = StringIO.new
+      described_class.configuration.logger = Logger.new(output)
+      allow(described_class).to receive(:running?).and_return(true)
+
+      described_class.configure { |c| c.max_connections = 128 }
+
+      expect(output.string).to include("Configuration changed while processors are running")
+    end
+
+    it "does not warn when the configuration changes before processors run" do
+      output = StringIO.new
+      described_class.configuration.logger = Logger.new(output)
+
+      described_class.configure { |c| c.max_connections = 128 }
+
+      expect(output.string).to be_empty
+    end
+
     it "yields the same configuration on every call so options accumulate" do
       described_class.configure { |c| c.max_connections = 512 }
       described_class.configure { |c| c.request_timeout = 120 }

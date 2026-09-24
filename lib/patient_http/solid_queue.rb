@@ -85,6 +85,13 @@ module PatientHttp
       # another. `PatientHttp.configure` calls this method, so application code
       # can use either one.
       #
+      # Configure the gem before the processors start. Running processors use
+      # this same configuration object, so an option changed while they run
+      # takes effect partway through the requests they're handling, and a
+      # processor profile declared while they run isn't started until the
+      # next restart. Changing the configuration while processors run logs a
+      # warning.
+      #
       # @example
       #   PatientHttp.configure do |config|
       #     config.max_connections = 512
@@ -95,7 +102,15 @@ module PatientHttp
       # @return [Configuration] The configuration.
       def configure
         config = configuration
-        yield(config) if block_given?
+        if block_given?
+          if running?
+            config.logger&.warn(
+              "[PatientHttp::SolidQueue] Configuration changed while processors are running; " \
+              "configure the gem before the Solid Queue worker starts."
+            )
+          end
+          yield(config)
+        end
         config
       end
 
@@ -124,7 +139,6 @@ module PatientHttp
       #
       # @return [Configuration] The new configuration.
       def reset_configuration!
-        @external_storage = nil
         PatientHttp.default_configuration = nil
         configuration
       end
@@ -241,11 +255,10 @@ module PatientHttp
         # Catch a misspelled profile name at the call site. A job that names an
         # unconfigured profile is retried instead, which covers rolling deploys
         # where the executing process is older than the enqueueing one.
-        unless configuration.processor_profiles.key?(processor_name.to_sym)
+        profile_config = processor_config_for(processor_name)
+        unless profile_config
           raise PatientHttp::UnknownProcessorError.new("No processor profile configured for #{processor_name.inspect}")
         end
-
-        profile_config = processor_config_for(processor_name)
 
         # The PatientHttp module methods pass nil when the caller did not ask for a
         # specific behavior, so fall back to the processor profile's setting.
@@ -442,19 +455,22 @@ module PatientHttp
       end
 
       # Returns the configuration for a processor profile. Uses the running
-      # processor's configuration if there is one. A name without a declared
-      # profile uses the base configuration.
+      # processor's configuration if there is one.
       #
       # @param name [Symbol, String] The processor name.
-      # @return [PatientHttp::Configuration] The configuration for the profile.
+      # @return [PatientHttp::Configuration, nil] The configuration for the
+      #   profile, or `nil` if no processor has that name and the profile isn't
+      #   declared.
       # @api private
       def processor_config_for(name)
-        key = name.to_sym
-        running = @processors[key]
+        key = name.to_s
+        return nil if key.empty?
+
+        running = @processors[key.to_sym]
         return running.config if running
 
         config = configuration
-        config.processor_options(key) ? config.processor_config(key) : config
+        config.processor_config(key) if config.processor_options(key)
       end
 
       private

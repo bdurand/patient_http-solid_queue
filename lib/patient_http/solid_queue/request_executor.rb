@@ -35,12 +35,11 @@ module PatientHttp
           active_job_data: nil,
           synchronous: false,
           callback_args: nil,
-          raise_error_responses: false,
+          raise_error_responses: nil,
           request_id: nil,
           processor_name: nil
         )
           active_job_data = validate_active_job_data(active_job_data)
-          config = PatientHttp::SolidQueue.configuration
 
           # Resolve the processor profile up front so the task is built with
           # the options of the processor that will run it. A running processor
@@ -48,11 +47,11 @@ module PatientHttp
           # falls back to the base configuration here and is reported below.
           name = (processor_name || request.processor || :default).to_sym
           processor = PatientHttp::SolidQueue.processor(name)
-          profile_declared = config.processor_profiles.key?(name)
-          profile_config = PatientHttp::SolidQueue.processor_config_for(name)
+          declared_config = PatientHttp::SolidQueue.processor_config_for(name)
+          profile_config = declared_config || PatientHttp::SolidQueue.configuration
 
-          # Jobs enqueued by earlier versions of the gem can carry nil, which
-          # means the caller did not ask for a specific behavior.
+          # A nil value means the caller did not ask for a specific behavior.
+          # Jobs enqueued by earlier versions of the gem can also carry nil.
           raise_error_responses = profile_config.raise_error_responses if raise_error_responses.nil?
 
           task_handler = TaskHandler.new(active_job_data, config: profile_config)
@@ -81,7 +80,7 @@ module PatientHttp
           # lands in Active Job's retry mechanism instead of being dropped;
           # this covers rolling deploys where an old process has not
           # configured a new profile yet.
-          if processor.nil? && !profile_declared
+          if declared_config.nil?
             raise PatientHttp::UnknownProcessorError, "No processor profile configured for #{name.inspect}"
           end
 

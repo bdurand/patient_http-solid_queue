@@ -8,11 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Install generator: `rails generate patient_http:solid_queue:install` copies the crash-recovery migration and writes a commented `config/initializers/patient_http.rb`. It reads `config/database.yml`, finds the database Solid Queue uses, writes the migration into that database's migrations path, and prints the matching migrate command, so a multi-database application needs no extra arguments. Pass `--database` to name the database explicitly, or `--skip-initializer` for the migration alone.
+- Install generator: `rails generate patient_http:solid_queue:install` copies the crash-recovery migration and writes a commented `config/initializers/patient_http.rb`. It finds the database Solid Queue uses from `config.solid_queue.connects_to` or `config/database.yml`, writes the migration into that database's migrations path, and prints the matching migrate command, so a multi-database application needs no extra arguments. Pass `--database` to name the database explicitly, or `--skip-initializer` for the migration alone.
 
 ### Fixed
 
-- `config.raise_error_responses` applies to requests made with the `PatientHttp` module methods. The module methods pass `nil` when a request doesn't set the option, and `nil` was treated as `false`, so the configured default was ignored.
+- `config.raise_error_responses` applies to requests made with the `PatientHttp` module methods. The module methods pass `nil` when a request doesn't set the option, and `nil` was treated as `false`, so the configured default was ignored. Jobs already enqueued without the option also fall back to the configuration of the processor that runs them.
 - Processor profile overrides for `raise_error_responses` and `payload_store_threshold` apply to requests routed to that profile. Previously the request payload and the callback result used the base configuration's `payload_store_threshold`, whatever processor ran the request.
 - **The shipped migration could not be run.** Its file was named `create_solid_queue_async_http_tables.rb` while the class inside it was `CreatePatientHttpSolidQueueTables`, so `db:migrate` raised `NameError: uninitialized constant CreateSolidQueueAsyncHttpTables` after copying it with `patient_http_solid_queue:install:migrations`. The file is now named to match its class. Applications that worked around this by renaming the file themselves are unaffected.
 
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`configure` now accumulates instead of replacing.** It yields the one configuration object for the process rather than building a new one each time, so several initializers can each contribute options and a second call no longer discards what an earlier one registered. Code that relied on `configure` resetting the configuration should call `reset_configuration!` first.
 - The configuration is created on first use and published to `PatientHttp` at that moment. Previously it was published only inside `configure`, so a process that started a processor without calling `configure` never received module level secrets registered with `PatientHttp.register_secret`.
 - The request handler stays registered for the life of the process. `stop` no longer unregisters it, so a request made while the process is shutting down is enqueued for another process to run instead of raising.
+- The default `shutdown_timeout` and `logger` are read from Solid Queue when they're used instead of when the configuration is built, so Solid Queue settings made in a later initializer apply.
 - The default `User-Agent` header is `PatientHttp`, the same as the base gem and the Sidekiq integration. It was `SolidQueue-AsyncHttp`. Set `config.user_agent` to keep the old value.
 - `payload_store_threshold` moved to `PatientHttp::Configuration`, next to `register_payload_store`. It is inherited, so `config.payload_store_threshold` is unchanged. `PatientHttp::SolidQueue::Configuration::DEFAULT_PAYLOAD_STORE_THRESHOLD` now points at the base gem's constant and is deprecated.
 - Minimum Ruby version is 3.3.

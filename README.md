@@ -661,7 +661,7 @@ bin/rails db:migrate
 
 The generator creates a migration for the crash-recovery and in-flight request tables. It also creates a commented initializer, which you can edit or delete.
 
-The tables must be in the database that Solid Queue uses. The generator reads `config/database.yml`, finds that database, and writes the migration to its migrations path, so a multi-database application needs no extra arguments. The generator prints the migrate command for the database that it chose. For a typical setup like the following, the command is `bin/rails db:migrate:queue`:
+The tables must be in the database that Solid Queue uses. The generator finds that database from `config.solid_queue.connects_to`, or from the database names in `config/database.yml`, and writes the migration to its migrations path, so a multi-database application needs no extra arguments. The generator prints the migrate command for the database that it chose. For a typical setup like the following, the command is `bin/rails db:migrate:queue`:
 
 ```yaml
 development:
@@ -675,7 +675,7 @@ development:
       - db/queue_migrate
 ```
 
-If the database isn't named `queue` and the generator can't find it, name the database:
+If the generator can't find the database, name it:
 
 ```bash
 bin/rails generate patient_http:solid_queue:install --database=solid_queue

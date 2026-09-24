@@ -71,15 +71,18 @@ module PatientHttp
         on_retries_exhausted: nil,
         **pool_options
       )
-        if ::SolidQueue.shutdown_timeout
-          pool_options[:shutdown_timeout] ||= [::SolidQueue.shutdown_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
-        end
-        pool_options[:logger] ||= (defined?(::SolidQueue.logger) ? ::SolidQueue.logger : nil)
+        # The Solid Queue defaults for these options are read when the options
+        # are used, so settings that Solid Queue gets after this configuration
+        # is built still apply.
+        pool_options = pool_options.compact
 
         super(**pool_options)
 
+        @shutdown_timeout_set = pool_options.key?(:shutdown_timeout)
+        @logger_set = pool_options.key?(:logger)
         @processor_profiles = {default: {}}
         @profile_configs = {}
+        @profile_configs_mutex = Mutex.new
         self.queue_name = queue_name
         self.heartbeat_interval = heartbeat_interval
         self.orphan_threshold = orphan_threshold
@@ -109,8 +112,11 @@ module PatientHttp
       # @raise [ArgumentError] If the name is empty or an option is invalid.
       def processor(name, **options)
         key = normalize_processor_name(name)
-        @profile_configs.delete(key)
-        @processor_profiles[key] = normalize_profile_options!(options)
+        normalized = normalize_profile_options!(options)
+        @profile_configs_mutex.synchronize do
+          @profile_configs.delete(key)
+          @processor_profiles[key] = normalized
+        end
       end
 
       # Returns the options declared for a named processor profile.
@@ -119,7 +125,10 @@ module PatientHttp
       # @return [Hash, nil] The stored options, or `nil` if the profile isn't
       #   declared.
       def processor_options(name)
-        @processor_profiles[normalize_processor_name(name)]
+        key = name.to_s
+        return nil if key.empty?
+
+        @processor_profiles[key.to_sym]
       end
 
       # Returns all declared processor profiles, including `:default`.
@@ -148,7 +157,50 @@ module PatientHttp
 
         return self if profile.empty?
 
-        @profile_configs[key] ||= ProfileConfiguration.new(self, profile)
+        @profile_configs_mutex.synchronize do
+          @profile_configs[key] ||= ProfileConfiguration.new(self, profile)
+        end
+      end
+
+      # Returns the graceful shutdown timeout in seconds. If it isn't set,
+      # returns the Solid Queue shutdown timeout minus 2 seconds, so that the
+      # processor stops before Solid Queue gives up on the worker.
+      #
+      # @return [Numeric] The timeout in seconds.
+      def shutdown_timeout
+        solid_queue_timeout = ::SolidQueue.shutdown_timeout
+        return super if @shutdown_timeout_set || solid_queue_timeout.nil?
+
+        [solid_queue_timeout - SHUTDOWN_TIMEOUT_BUFFER, 1].max
+      end
+
+      # Sets the graceful shutdown timeout in seconds.
+      #
+      # @param value [Numeric] The timeout in seconds. Must be positive.
+      # @return [void]
+      # @raise [ArgumentError] If `value` isn't positive.
+      def shutdown_timeout=(value)
+        super
+        @shutdown_timeout_set = true
+      end
+
+      # Returns the logger. If it isn't set, returns the Solid Queue logger.
+      #
+      # @return [Logger] The logger.
+      def logger
+        return super if @logger_set
+
+        solid_queue_logger = ::SolidQueue.logger if ::SolidQueue.respond_to?(:logger)
+        solid_queue_logger || super
+      end
+
+      # Sets the logger.
+      #
+      # @param value [Logger, nil] The logger.
+      # @return [void]
+      def logger=(value)
+        super
+        @logger_set = true
       end
 
       # Sets the number of seconds between heartbeat updates for in-flight

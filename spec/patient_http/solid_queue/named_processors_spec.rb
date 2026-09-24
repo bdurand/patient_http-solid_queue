@@ -73,6 +73,12 @@ RSpec.describe "Named processors" do
       expect { config.processor("", max_connections: 1) }.to raise_error(ArgumentError, /processor name cannot be empty/)
     end
 
+    it "returns nil for the options of an undeclared or empty name" do
+      config = PatientHttp::SolidQueue::Configuration.new
+      expect(config.processor_options(:missing)).to be_nil
+      expect(config.processor_options("")).to be_nil
+    end
+
     it "builds a profile configuration that inherits base options" do
       config = PatientHttp::SolidQueue::Configuration.new(max_connections: 100, request_timeout: 30)
       config.processor(:llm, max_connections: 200)
@@ -183,8 +189,9 @@ RSpec.describe "Named processors" do
       expect(config.max_connections).to eq(20)
     end
 
-    it "returns the base configuration for a name without a declared profile" do
-      expect(PatientHttp::SolidQueue.processor_config_for(:undeclared)).to be(PatientHttp::SolidQueue.configuration)
+    it "returns nil for a name without a declared profile" do
+      expect(PatientHttp::SolidQueue.processor_config_for(:undeclared)).to be_nil
+      expect(PatientHttp::SolidQueue.processor_config_for("")).to be_nil
     end
   end
 
@@ -215,6 +222,14 @@ RSpec.describe "Named processors" do
 
       job = ActiveJob::Base.queue_adapter.enqueued_jobs.last
       expect(job[:args].last).to eq("default")
+    end
+
+    it "raises UnknownProcessorError for an empty processor name" do
+      request = PatientHttp::Request.new(:get, "https://example.com")
+
+      expect {
+        PatientHttp::SolidQueue.execute(request, callback: callback_class, processor: "")
+      }.to raise_error(PatientHttp::UnknownProcessorError)
     end
 
     it "uses the processor profile raise_error_responses when none is given" do

@@ -50,8 +50,9 @@ module PatientHttp
       # @param callback_args [Hash, nil] The arguments to pass to the callback.
       # @param request_id [String, nil] The request ID.
       # @param processor_name [String, nil] The name of the processor profile
-      #   that runs the request. If `nil`, uses the default processor. Jobs
-      #   enqueued by earlier versions of the gem don't have this argument.
+      #   that runs the request. If `nil`, uses the processor set on the
+      #   request, then the default processor. Jobs enqueued by earlier
+      #   versions of the gem don't have this argument.
       # @return [void]
       def perform(data, callback_service_name, raise_error_responses, callback_args, request_id, processor_name = nil)
         actual_data = PatientHttp::ExternalStorage.storage_ref?(data) ? PatientHttp::SolidQueue.external_storage.fetch(data) : data
@@ -71,7 +72,7 @@ module PatientHttp
           callback_args: callback_args,
           active_job_data: active_job_data,
           request_id: request_id,
-          processor_name: processor_name || "default"
+          processor_name: processor_name
         )
       end
     end

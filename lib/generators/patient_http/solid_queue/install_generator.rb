@@ -50,7 +50,8 @@ module PatientHttp
       end
 
       # Copies the migration to the Solid Queue database's migrations path.
-      # Skips the copy if a migration for the tables is already there.
+      # Skips the copy if any migrations path already has a migration for the
+      # tables.
       #
       # @return [void]
       def copy_migration
@@ -119,9 +120,13 @@ module PatientHttp
       # The generator checks the following, in order:
       #
       # 1. The database named by `--database`.
-      # 2. A database named `queue`, which is the Rails default for Solid Queue.
-      # 3. Any database whose name contains `queue`.
-      # 4. The primary database.
+      # 2. The database that Solid Queue connects to in the current environment
+      #    (`config.solid_queue.connects_to`).
+      # 3. The primary database, if the current environment runs Solid Queue
+      #    without `connects_to`.
+      # 4. A database named `queue`, which is the Rails default for Solid Queue,
+      #    then any database whose name contains `queue`.
+      # 5. The primary database.
       #
       # Databases in the current environment are checked first, then databases
       # in the other environments. Solid Queue often has its own database only
@@ -130,25 +135,56 @@ module PatientHttp
       # @return [ActiveRecord::DatabaseConfigurations::DatabaseConfig, nil] The
       #   database configuration, or `nil` if `config/database.yml` can't be
       #   read.
+      # @raise [Rails::Generators::Error] If `--database` names a database that
+      #   isn't configured, or `config/database.yml` can't be read to find it.
       def database_config
         return @database_config if defined?(@database_config)
 
         configs = database_configs
-        @database_config = if configs.nil?
-          nil
-        elsif options[:database]
-          named = configs.find { |config| config.name == options[:database] }
+        @database_config = if options[:database]
+          named = configs&.find { |config| config.name == options[:database] }
           unless named
             raise ::Rails::Generators::Error.new(
               "No #{options[:database].inspect} database is configured in config/database.yml."
             )
           end
           named
-        else
-          configs.find { |config| config.name == "queue" } ||
-            configs.find { |config| config.name.to_s.include?("queue") } ||
-            configs.find { |config| config.env_name == ::Rails.env && config.name == "primary" }
+        elsif configs
+          primary = configs.find { |config| config.env_name == ::Rails.env && config.name == "primary" }
+          connected_name = solid_queue_database_name
+          connected = configs.find { |config| config.env_name == ::Rails.env && config.name == connected_name } if connected_name
+
+          if connected
+            connected
+          elsif connected_name.nil? && solid_queue_adapter?
+            primary
+          else
+            configs.find { |config| config.name == "queue" } ||
+              configs.find { |config| config.name.to_s.include?("queue") } ||
+              primary
+          end
         end
+      end
+
+      # Returns the name of the database that Solid Queue connects to in the
+      # current environment.
+      #
+      # @return [String, nil] The database name, or `nil` if Solid Queue doesn't
+      #   set `connects_to` with a writing database.
+      def solid_queue_database_name
+        return nil unless defined?(::SolidQueue) && ::SolidQueue.respond_to?(:connects_to)
+
+        connects_to = ::SolidQueue.connects_to
+        return nil unless connects_to.is_a?(Hash)
+
+        connects_to.dig(:database, :writing)&.to_s
+      end
+
+      # Returns whether Active Job uses Solid Queue in the current environment.
+      #
+      # @return [Boolean] `true` if the Active Job queue adapter is Solid Queue.
+      def solid_queue_adapter?
+        ::ActiveJob::Base.queue_adapter_name.to_s == "solid_queue"
       end
 
       # Returns the database configurations from `config/database.yml`, with
@@ -158,14 +194,18 @@ module PatientHttp
       #   The database configurations, or `nil` if `config/database.yml` can't
       #   be read.
       def database_configs
-        all_configs = ::ActiveRecord::Base.configurations.configs_for
-        current_env_configs = all_configs.select { |config| config.env_name == ::Rails.env }
-        current_env_configs + (all_configs - current_env_configs)
-      rescue => e
-        # Without a readable database configuration, fall back to db/migrate
-        # and let the developer move the file if it landed in the wrong place.
-        say("Could not read config/database.yml (#{e.class}); using db/migrate.", :yellow)
-        nil
+        return @database_configs if defined?(@database_configs)
+
+        @database_configs = begin
+          all_configs = ::ActiveRecord::Base.configurations.configs_for
+          current_env_configs = all_configs.select { |config| config.env_name == ::Rails.env }
+          current_env_configs + (all_configs - current_env_configs)
+        rescue => e
+          # Without a readable database configuration, fall back to db/migrate
+          # and let the developer move the file if it landed in the wrong place.
+          say("Could not read config/database.yml (#{e.class}); using db/migrate.", :yellow)
+          nil
+        end
       end
 
       # Returns the Rake task that runs the migration on the detected database.
@@ -188,13 +228,20 @@ module PatientHttp
         env_name unless env_name.nil? || env_name == ::Rails.env
       end
 
-      # Returns the paths of migrations in the migrations directory that already
-      # create this gem's tables, including copies made by the engine's
-      # `install:migrations` task.
+      # Returns the paths of migrations that already create this gem's tables.
+      # Checks the migrations paths of every configured database and
+      # `db/migrate`, and matches copies made by the engine's
+      # `install:migrations` task and copies under the gem's earlier migration
+      # name.
       #
       # @return [Array<String>] The migration paths.
       def existing_migrations
-        Dir.glob(File.join(destination_root, migration_directory, "[0-9]*_create_patient_http_solid_queue_tables*.rb"))
+        directories = [migration_directory, "db/migrate"]
+        directories += Array(database_configs).flat_map { |config| Array(config.migrations_paths) }
+        pattern = "[0-9]*_create_{patient_http_solid_queue,solid_queue_async_http}_tables*.rb"
+        directories.uniq.flat_map do |directory|
+          Dir.glob(File.join(destination_root, directory, pattern))
+        end
       end
     end
   end

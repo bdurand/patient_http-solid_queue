@@ -51,5 +51,24 @@ RSpec.describe PatientHttp::SolidQueue::RequestExecutor do
       )
       expect(result).to be_a(String)
     end
+
+    it "uses the configured raise_error_responses when the value is omitted" do
+      PatientHttp::SolidQueue.configuration.raise_error_responses = true
+      allow(PatientHttp::RequestTask).to receive(:new).and_call_original
+
+      described_class.execute(request, callback: callback_class, active_job_data: job_data)
+
+      expect(PatientHttp::RequestTask).to have_received(:new).with(hash_including(raise_error_responses: true))
+    ensure
+      PatientHttp::SolidQueue.reset_configuration!
+    end
+
+    it "raises UnknownProcessorError for an empty processor name" do
+      allow(PatientHttp).to receive(:testing?).and_return(false)
+
+      expect {
+        described_class.execute(request, callback: callback_class, active_job_data: job_data, processor_name: "")
+      }.to raise_error(PatientHttp::UnknownProcessorError)
+    end
   end
 end

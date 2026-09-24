@@ -25,6 +25,37 @@ RSpec.describe PatientHttp::SolidQueue::Configuration do
     it "sets shutdown_timeout based on SolidQueue.shutdown_timeout" do
       expect(config.shutdown_timeout).to eq(SolidQueue.shutdown_timeout - described_class::SHUTDOWN_TIMEOUT_BUFFER)
     end
+
+    it "follows SolidQueue.shutdown_timeout changes made after the configuration is built" do
+      original = SolidQueue.shutdown_timeout
+      config
+      SolidQueue.shutdown_timeout = 12
+      expect(config.shutdown_timeout).to eq(12 - described_class::SHUTDOWN_TIMEOUT_BUFFER)
+    ensure
+      SolidQueue.shutdown_timeout = original
+    end
+
+    it "keeps an explicitly set shutdown_timeout" do
+      config.shutdown_timeout = 7
+      expect(config.shutdown_timeout).to eq(7)
+      expect(described_class.new(shutdown_timeout: 4).shutdown_timeout).to eq(4)
+    end
+
+    it "follows SolidQueue.logger changes made after the configuration is built" do
+      original = SolidQueue.logger
+      config
+      logger = Logger.new(File::NULL)
+      SolidQueue.logger = logger
+      expect(config.logger).to be(logger)
+    ensure
+      SolidQueue.logger = original
+    end
+
+    it "keeps an explicitly set logger" do
+      logger = Logger.new(File::NULL)
+      config.logger = logger
+      expect(config.logger).to be(logger)
+    end
   end
 
   describe "#heartbeat_interval=" do
