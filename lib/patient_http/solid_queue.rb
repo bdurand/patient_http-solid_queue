@@ -242,7 +242,9 @@ module PatientHttp
         # The PatientHttp module methods pass nil when the caller did not ask for a
         # specific behavior, so fall back to the processor profile's setting.
         if raise_error_responses.nil?
-          raise_error_responses = configuration.processor_config(processor_name).raise_error_responses
+          config = configuration
+          config = config.processor_config(processor_name) if config.processor(processor_name)
+          raise_error_responses = config.raise_error_responses
         end
 
         encrypted = encrypt(request.as_json)
