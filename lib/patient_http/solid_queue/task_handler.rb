@@ -16,8 +16,11 @@ module PatientHttp
       #
       # @param active_job_data [Hash] The serialized Active Job that made the
       #   request.
-      def initialize(active_job_data)
+      # @param config [PatientHttp::Configuration, nil] The configuration of the
+      #   processor that runs the request. If `nil`, uses the base configuration.
+      def initialize(active_job_data, config: nil)
         @active_job_data = active_job_data
+        @config = config
       end
 
       # Enqueues a `CallbackJob` that calls the callback service's `on_complete`
@@ -92,7 +95,7 @@ module PatientHttp
         encrypted = PatientHttp::SolidQueue.encrypt(data)
         external_storage = PatientHttp::SolidQueue.external_storage
         if external_storage.enabled?
-          external_storage.store(encrypted, max_size: PatientHttp::SolidQueue.configuration.payload_store_threshold)
+          external_storage.store(encrypted, max_size: (@config || PatientHttp::SolidQueue.configuration).payload_store_threshold)
         else
           encrypted
         end

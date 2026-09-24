@@ -239,18 +239,16 @@ module PatientHttp
           raise PatientHttp::UnknownProcessorError.new("No processor profile configured for #{processor_name.inspect}")
         end
 
+        profile_config = configuration.processor_config(processor_name)
+
         # The PatientHttp module methods pass nil when the caller did not ask for a
         # specific behavior, so fall back to the processor profile's setting.
-        if raise_error_responses.nil?
-          config = configuration
-          config = config.processor_config(processor_name) if config.processor(processor_name)
-          raise_error_responses = config.raise_error_responses
-        end
+        raise_error_responses = profile_config.raise_error_responses if raise_error_responses.nil?
 
         encrypted = encrypt(request.as_json)
 
         data = if external_storage.enabled?
-          external_storage.store(encrypted, max_size: configuration.payload_store_threshold)
+          external_storage.store(encrypted, max_size: profile_config.payload_store_threshold)
         else
           encrypted
         end

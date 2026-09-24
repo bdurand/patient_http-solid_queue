@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `config.raise_error_responses` applies to requests made with the `PatientHttp` module methods. The module methods pass `nil` when a request doesn't set the option, and `nil` was treated as `false`, so the configured default was ignored.
+- Processor profile overrides for `raise_error_responses` and `payload_store_threshold` apply to requests routed to that profile. Previously the request payload and the callback result used the base configuration's `payload_store_threshold`, whatever processor ran the request.
 - **The shipped migration could not be run.** Its file was named `create_solid_queue_async_http_tables.rb` while the class inside it was `CreatePatientHttpSolidQueueTables`, so `db:migrate` raised `NameError: uninitialized constant CreateSolidQueueAsyncHttpTables` after copying it with `patient_http_solid_queue:install:migrations`. The file is now named to match its class. Applications that worked around this by renaming the file themselves are unaffected.
 
 ### Changed

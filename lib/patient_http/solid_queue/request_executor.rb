@@ -39,14 +39,18 @@ module PatientHttp
           processor_name: nil
         )
           active_job_data = validate_active_job_data(active_job_data)
-          task_handler = TaskHandler.new(active_job_data)
           config = PatientHttp::SolidQueue.configuration
 
           # Resolve the processor profile up front so the task is built with
-          # the options of the processor that will run it. An unknown name
+          # the options of the processor that will run it. A running processor
+          # already holds its built profile configuration. An unknown name
           # falls back to the base configuration here and is reported below.
           name = (processor_name || request.processor || :default).to_sym
-          profile_config = config.processor_profiles.key?(name) ? config.processor_config(name) : config
+          processor = PatientHttp::SolidQueue.processor(name)
+          profile_declared = config.processor_profiles.key?(name)
+          profile_config = processor&.config || (profile_declared ? config.processor_config(name) : config)
+
+          task_handler = TaskHandler.new(active_job_data, config: profile_config)
 
           task = PatientHttp::RequestTask.new(
             request: request,
@@ -68,12 +72,11 @@ module PatientHttp
             return task.id
           end
 
-          # Look up the named processor. An unknown name raises so the job
+          # An unknown processor name raises so the job
           # lands in Active Job's retry mechanism instead of being dropped;
           # this covers rolling deploys where an old process has not
           # configured a new profile yet.
-          processor = PatientHttp::SolidQueue.processor(name)
-          if processor.nil? && !config.processor_profiles.key?(name)
+          if processor.nil? && !profile_declared
             raise PatientHttp::UnknownProcessorError, "No processor profile configured for #{name.inspect}"
           end
 
